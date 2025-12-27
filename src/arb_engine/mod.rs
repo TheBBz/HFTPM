@@ -4,7 +4,6 @@ use crate::utils::Config;
 use crate::utils::ScopedTimer;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use std::time::Instant;
 use std::sync::Arc;
 use anyhow::{Result, Context};
 use tracing::{info, debug};
@@ -353,7 +352,7 @@ impl ArbEngine {
         &self,
         raw_edge: Decimal,
         min_edge: Decimal,
-        bankroll: u64,
+        _bankroll: u64,
     ) -> Decimal {
         let edge_ratio = raw_edge / min_edge;
         let base_max = Decimal::from(self.config.trading.max_arb_size);

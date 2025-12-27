@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
 use std::collections::VecDeque;
+use std::str::FromStr;
 use anyhow::Result;
 use tracing::{info, warn, error};
 use chrono::Utc;
@@ -123,7 +124,7 @@ impl Monitor {
             alert_type: AlertType::ArbitrageDetected,
             message: format!("Arbitrage detected: {} ({:.2}% edge)", arb_op.market_id, arb_op.total_edge * rust_decimal::Decimal::ONE_HUNDRED),
             timestamp: Utc::now().timestamp(),
-            severity: if arb_op.total_edge > rust_decimal::Decimal::from_str("0.04").unwrap() {
+            severity: if arb_op.total_edge > Decimal::from_str("0.04").unwrap() {
                 AlertSeverity::Info
             } else {
                 AlertSeverity::Warning
@@ -131,7 +132,7 @@ impl Monitor {
         };
 
         let mut alerts = self.alerts.write().await;
-        alerts.push_back(alert);
+        alerts.push_back(alert.clone());
 
         while alerts.len() > 500 {
             alerts.pop_front();
@@ -154,7 +155,7 @@ impl Monitor {
 
     #[inline]
     pub async fn record_arbitrage_executed(
-        &self,
+        &mut self,
         arb_op: &ArbitrageOpportunity,
         result: &ExecutionResult,
         execution_time: std::time::Duration,
@@ -168,7 +169,8 @@ impl Monitor {
             metrics.arb_missed += 1;
         }
 
-        self.latency_tracker.record(execution_time.as_nanos() as u64);
+        let latency = execution_time.as_nanos() as u64;
+        self.latency_tracker.record(latency);
 
         let trade_record = TradeRecord {
             timestamp: Utc::now().timestamp(),
@@ -224,12 +226,37 @@ impl Monitor {
                 severity: AlertSeverity::Warning,
             };
 
-            let mut alerts = self.alerts.write().await;
-            alerts.push_back(alert);
+        let alert = Alert {
+            alert_type: AlertType::TradeExecuted,
+            message: format!(
+                "Trade executed: ${:.2} profit in {:.2}ms on {}",
+                arb_op.net_profit,
+                execution_time.as_millis(),
+                arb_op.market_id
+            ),
+            timestamp: Utc::now().timestamp(),
+            severity: AlertSeverity::Info,
+        };
 
-            while alerts.len() > 500 {
-                alerts.pop_front();
-            }
+        let mut alerts = self.alerts.write().await;
+        alerts.push_back(alert.clone());
+
+        while alerts.len() > 500 {
+            alerts.pop_front();
+        }
+
+        drop(alerts);
+
+        info!(
+            "✅ Arbitrage executed: {} in {:.2}ms (success: {})",
+            arb_op.market_id,
+            execution_time.as_secs_f64() * 1000.0,
+            result.success
+        );
+
+        if self.config.alerts.enable_telegram && arb_op.position_size >= self.config.alerts.alert_on_trade_usd.into() {
+            self.send_telegram_alert(&alert).await;
+        }
 
             drop(alerts);
 
@@ -251,10 +278,26 @@ impl Monitor {
         };
 
         let mut alerts = self.alerts.write().await;
-        alerts.push_back(alert);
+        alerts.push_back(alert.clone());
 
         while alerts.len() > 500 {
             alerts.pop_front();
+        }
+
+        drop(alerts);
+
+        error!("❌ {}", error_message);
+
+        if self.config.alerts.enable_telegram && self.config.alerts.alert_on_error {
+            self.send_telegram_alert(&alert).await;
+        }
+
+        drop(alerts);
+
+        warn!("⚠️  Latency spike: {}ms", current_latency_ms);
+
+        if self.config.alerts.alert_on_latency_spike {
+            self.send_telegram_alert(&alert).await;
         }
 
         drop(alerts);
@@ -316,7 +359,7 @@ impl Monitor {
             urlencoding::encode(&message)
         );
 
-        if let Err(e) = reqwest::get(&url).send().await {
+        if let Err(e) = reqwest::get(&url).await {
             error!("Failed to send Telegram alert: {:?}", e);
         }
     }
@@ -400,8 +443,8 @@ impl Monitor {
     pub fn get_metrics(&self) -> Metrics {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
-                self.metrics.read().await
+                self.metrics.read().await.clone()
             })
-        }).unwrap().clone()
+        }).unwrap()
     }
 }

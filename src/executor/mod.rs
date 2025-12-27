@@ -9,14 +9,16 @@ use polymarket_client_sdk::clob::{
         SignedOrder as SdkSignedOrder,
     },
 };
+use polymarket_client_sdk::auth::state::Authenticated;
+use polymarket_client_sdk::auth::Normal;
 use rust_decimal::Decimal;
 use std::sync::Arc;
 use anyhow::{Result, Context};
-use tracing::{info, error, warn, debug};
+use tracing::{info, error, warn};
 use futures::future::join_all;
 use std::time::Instant;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SignedOrder {
     pub order: SdkSignedOrder,
     pub order_hash: String,
@@ -45,7 +47,7 @@ pub struct OrderResult {
 
 pub struct OrderExecutor {
     config: Arc<Config>,
-    clob_client: Arc<Client<polymarket_client_sdk::auth::Authenticated<polymarket_client_sdk::auth::Normal>>>,
+    clob_client: Arc<Client<Authenticated<Normal>>>,
 }
 
 impl OrderExecutor {
@@ -75,7 +77,7 @@ impl OrderExecutor {
     }
 
     pub async fn execute_arbitrage(&self, arb_op: &ArbitrageOpportunity) -> Result<ExecutionResult> {
-        let _timer = ScopedTimer::new("execute_arbitrage");
+        let _timer = ScopedTimer::new("execute_arbitrage", None);
 
         info!(
             "🎯 Executing arbitrage for market {}",
@@ -164,13 +166,13 @@ impl OrderExecutor {
                 .side(Side::Buy)
                 .order_type(OrderType::FOK);
 
-            let signable_order = order_builder.build().await
+            let signable_order: polymarket_client_sdk::clob::types::SignableOrder = order_builder.build().await
                 .context("Failed to create order")?;
 
-            let signed_order = self.clob_client.sign(&signable_order).await
+            let signed_order: SdkSignedOrder = self.clob_client.sign(&signable_order).await
                 .context("Failed to sign order")?;
 
-            let order_hash = self.calculate_order_hash(&signed_order.order);
+            let order_hash = self.calculate_order_hash(&signed_order);
 
             signed_orders.push(SignedOrder {
                 order: signed_order,
@@ -194,7 +196,7 @@ impl OrderExecutor {
     }
 
     async fn submit_single_order(&self, signed_order: &SignedOrder) -> OrderResult {
-        let order_id = signed_order.order.order.orderId.to_string();
+        let order_id = signed_order.order.order.tokenId.to_string();
         let asset_id = signed_order.order.order.tokenId.to_string();
 
         match self.clob_client.post_order(signed_order.order.clone()).await {
@@ -219,10 +221,10 @@ impl OrderExecutor {
         }
     }
 
-    pub async fn cancel_open_orders(&self, market_id: &str) -> Result<usize> {
-        info!("🗑️  Cancelling orders for market {}", market_id);
+    pub async fn cancel_open_orders(&self, _market_id: &str) -> Result<usize> {
+        info!("🗑️  Cancelling orders");
 
-        let response = self.clob_client.cancel_all_orders().await
+        let response: polymarket_client_sdk::clob::types::CancelOrdersResponse = self.clob_client.cancel_all_orders().await
             .context("Failed to cancel orders")?;
 
         let cancel_count = response.canceled_orders.len();
@@ -260,11 +262,11 @@ impl OrderExecutor {
 
         let order = &signed_order.order;
 
-        hasher.update(order.tokenId.as_le_bytes::<32>());
-        hasher.update(order.makerAmount.as_le_bytes::<32>());
-        hasher.update(order.takerAmount.as_le_bytes::<32>());
-        hasher.update(order.expiration.as_le_bytes::<32>());
-        hasher.update(order.nonce.as_le_bytes::<32>());
+        hasher.update(order.tokenId.as_le_bytes().as_ref());
+        hasher.update(order.makerAmount.as_le_bytes().as_ref());
+        hasher.update(order.takerAmount.as_le_bytes().as_ref());
+        hasher.update(order.expiration.as_le_bytes().as_ref());
+        hasher.update(order.nonce.as_le_bytes().as_ref());
 
         let result = hasher.finalize();
         hex::encode(result)

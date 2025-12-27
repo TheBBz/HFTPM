@@ -93,9 +93,10 @@ impl GammaClient {
                 .filter(|market| self.should_include_market(market, markets_config))
                 .collect();
 
+            let count = filtered_markets.len();
             all_markets.extend(filtered_markets);
 
-            debug!("Fetched {} markets on page {} (total: {})", filtered_markets.len(), page, all_markets.len());
+            debug!("Fetched {} markets on page {} (total: {})", count, page, all_markets.len());
 
             cursor = gamma_response.next_cursor.clone();
 

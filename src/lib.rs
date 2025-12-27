@@ -51,7 +51,7 @@ pub async fn run() -> Result<()> {
     let markets = gamma_client.fetch_markets(&config.markets).await?;
     info!("📈 Loaded {} markets from Gamma API", markets.len());
 
-    let ws_client = WebSocketClient::new(&config, &markets).await?;
+    let ws_client: crate::websocket::WebSocketClient = WebSocketClient::new(&config, &markets).await?;
     ws_client.subscribe_all_markets().await?;
 
     tokio::select! {

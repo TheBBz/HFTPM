@@ -1,9 +1,9 @@
 use config::{Config as ConfigLoader, Environment};
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use std::path::Path;
-use tracing::{info, warn};
-use anyhow::{Result, Context};
+use tracing::info;
+use anyhow::Result;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -123,7 +123,7 @@ impl Config {
             )
             .build()?;
 
-        let mut config: Config = settings.try_deserialize()
+        let config: Config = settings.try_deserialize()
             .context("Failed to deserialize config")?;
 
         if config.server.wss_url.is_empty() || config.server.rest_url.is_empty() {
