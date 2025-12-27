@@ -70,7 +70,7 @@ impl WebSocketClient {
     #[instrument(skip(self, orderbook_manager, arb_engine, risk_manager, executor, monitor))]
     pub async fn run(
         &mut self,
-        orderbook_manager: &mut OrderBookManager,
+        orderbook_manager: &OrderBookManager,
         arb_engine: &mut ArbEngine,
         risk_manager: &mut RiskManager,
         executor: &OrderExecutor,
@@ -100,7 +100,7 @@ impl WebSocketClient {
 
     async fn connect_and_run(
         &mut self,
-        orderbook_manager: &mut OrderBookManager,
+        orderbook_manager: &OrderBookManager,
         arb_engine: &mut ArbEngine,
         risk_manager: &mut RiskManager,
         executor: &OrderExecutor,
@@ -259,7 +259,7 @@ impl WebSocketClient {
     async fn handle_book_snapshot(
         &self,
         ws_msg: &WsMessage,
-        orderbook_manager: &mut OrderBookManager,
+        orderbook_manager: &OrderBookManager,
         arb_engine: &mut ArbEngine,
         risk_manager: &mut RiskManager,
         executor: &OrderExecutor,
@@ -340,7 +340,7 @@ impl WebSocketClient {
     async fn handle_price_change(
         &self,
         ws_msg: &WsMessage,
-        orderbook_manager: &mut OrderBookManager,
+        orderbook_manager: &OrderBookManager,
         arb_engine: &mut ArbEngine,
         risk_manager: &mut RiskManager,
         executor: &OrderExecutor,

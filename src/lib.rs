@@ -75,7 +75,10 @@ pub async fn run() -> Result<()> {
 
     info!("📊 Bankroll: ${} USDC", config.trading.bankroll);
 
-    let mut orderbook_manager = OrderBookManager::new(&config)?;
+    // Use Arc for thread-safe sharing of OrderBookManager
+    let orderbook_manager = std::sync::Arc::new(OrderBookManager::new(&config)?);
+    let orderbook_manager_scanner = orderbook_manager.clone();
+
     let mut arb_engine = ArbEngine::new(&config);
     let mut risk_manager = RiskManager::new(&config);
     let executor = OrderExecutor::new(&config).await?;
@@ -90,7 +93,8 @@ pub async fn run() -> Result<()> {
     info!("📈 Loaded {} markets from Gamma API", markets.len());
 
     // Initialize parallel scanner for 16-core optimization
-    let parallel_scanner = ParallelScanner::new(&config, markets.clone());
+    let parallel_scanner = std::sync::Arc::new(ParallelScanner::new(&config, markets.clone()));
+    let parallel_scanner_loop = parallel_scanner.clone();
 
     // Build correlation graph (uses 64GB RAM for caching relationships)
     info!("🔗 Building cross-market correlation graph (utilizing 64GB RAM)...");
@@ -100,9 +104,7 @@ pub async fn run() -> Result<()> {
     let mut ws_client = WebSocketClient::new(&config, &markets).await?;
     ws_client.subscribe_all_markets().await?;
 
-    // For now, run strategies inline based on config
-    // The WebSocket loop handles orderbook updates and arbitrage detection
-    // Market making and volume farming will be logged but run periodically
+    // Get strategy for the loops
     let strategy = config.trading.strategy.clone();
 
     // Log which strategies are active
@@ -124,7 +126,7 @@ pub async fn run() -> Result<()> {
     tokio::select! {
         // Main WebSocket loop (for orderbook updates + arbitrage detection)
         result = ws_client.run(
-            &mut orderbook_manager,
+            &*orderbook_manager,
             &mut arb_engine,
             &mut risk_manager,
             &executor,
@@ -132,11 +134,13 @@ pub async fn run() -> Result<()> {
         ) => {
             info!("🛑 WebSocket loop ended: {:?}", result);
         }
-        // Periodic strategy execution
+        // Periodic strategy execution + parallel scanning
         _ = run_periodic_strategies(
             &strategy,
             &mut market_maker,
             &mut volume_farmer,
+            &parallel_scanner_loop,
+            &orderbook_manager_scanner,
         ) => {
             info!("🛑 Strategy loop ended");
         }
@@ -150,44 +154,89 @@ pub async fn run() -> Result<()> {
             if matches!(strategy, Strategy::VolumeFarming | Strategy::Hybrid) {
                 info!("🗑️  Final Volume Farming Stats: {}", volume_farmer.get_stats());
             }
+            info!("🔬 Final Scanner Stats: {}", parallel_scanner.get_stats().await);
         }
     }
 
     Ok(())
 }
 
-/// Run periodic strategy stats logging
-/// Note: Full market making/volume farming integration requires shared orderbook state
-/// For now, this logs periodic stats while the WebSocket loop handles arbitrage
+/// Run periodic strategy execution + parallel market scanning
+/// Integrates with the 16-core parallel scanner for cross-market and multi-outcome detection
 async fn run_periodic_strategies(
     strategy: &Strategy,
     market_maker: &mut MarketMaker,
     volume_farmer: &mut VolumeFarmer,
+    parallel_scanner: &std::sync::Arc<ParallelScanner>,
+    orderbook_manager: &std::sync::Arc<OrderBookManager>,
 ) -> Result<()> {
     use std::time::Duration;
 
+    // Stats logging every 60 seconds
     let mut stats_interval = tokio::time::interval(Duration::from_secs(60));
+    // Parallel scanning every 5 seconds (fast enough to catch opportunities)
+    let mut scan_interval = tokio::time::interval(Duration::from_secs(5));
 
     loop {
-        stats_interval.tick().await;
-
-        // Log periodic stats based on strategy
-        match strategy {
-            Strategy::MarketMaking | Strategy::Hybrid => {
-                info!("📊 {}", market_maker.get_stats());
-            }
-            _ => {}
-        }
-
-        match strategy {
-            Strategy::VolumeFarming | Strategy::Hybrid => {
-                // Check if we should reset daily budget
-                if volume_farmer.should_reset_budget() {
-                    volume_farmer.reset_daily_budget();
+        tokio::select! {
+            _ = stats_interval.tick() => {
+                // Log periodic stats based on strategy
+                match strategy {
+                    Strategy::MarketMaking | Strategy::Hybrid => {
+                        info!("📊 {}", market_maker.get_stats());
+                    }
+                    _ => {}
                 }
-                info!("🗑️  {}", volume_farmer.get_stats());
+
+                match strategy {
+                    Strategy::VolumeFarming | Strategy::Hybrid => {
+                        // Check if we should reset daily budget
+                        if volume_farmer.should_reset_budget() {
+                            volume_farmer.reset_daily_budget();
+                        }
+                        info!("🗑️  {}", volume_farmer.get_stats());
+                    }
+                    _ => {}
+                }
+
+                // Log scanner stats
+                info!("🔬 {}", parallel_scanner.get_stats().await);
             }
-            _ => {}
+            _ = scan_interval.tick() => {
+                // Run parallel scans for arbitrage opportunities
+                match strategy {
+                    Strategy::Arbitrage | Strategy::Hybrid => {
+                        // Scan for multi-outcome arbitrage (sum of all outcomes < $1)
+                        let multi_opps = parallel_scanner.scan_multi_outcome_parallel(&*orderbook_manager).await;
+                        if !multi_opps.is_empty() {
+                            for opp in multi_opps.iter().take(3) {
+                                info!(
+                                    "💰 MULTI-OUTCOME: {} | {} outcomes @ ${:.4} | Edge: {:.2}% | Est. Profit: ${:.2}",
+                                    opp.market_question.chars().take(40).collect::<String>(),
+                                    opp.num_outcomes,
+                                    opp.total_price,
+                                    opp.edge * rust_decimal::Decimal::from(100),
+                                    opp.expected_profit
+                                );
+                            }
+                        }
+
+                        // Scan for cross-market arbitrage (logical inconsistencies)
+                        let cross_opps = parallel_scanner.scan_cross_market_parallel(&*orderbook_manager).await;
+                        if !cross_opps.is_empty() {
+                            for opp in cross_opps.iter().take(3) {
+                                info!(
+                                    "🔗 CROSS-MARKET: {:?} | Edge: {:.2}% | Est. Profit: ${:.2}",
+                                    opp.arb_type,
+                                    opp.edge * rust_decimal::Decimal::from(100),
+                                    opp.expected_profit
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 }

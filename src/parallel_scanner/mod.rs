@@ -229,11 +229,92 @@ impl ParallelScanner {
         words_a.intersection(&words_b).count()
     }
 
+    /// Scan a single market for multi-outcome arbitrage
+    /// Returns Some(opportunity) if sum of all asks < $1.00 (minus fees)
+    fn scan_market_for_multi_outcome(
+        &self,
+        market: &Market,
+        orderbook_manager: &OrderBookManager,
+    ) -> Option<MultiOutcomeOpportunity> {
+        // Get best asks for all outcomes in this market
+        let best_asks = orderbook_manager.get_best_asks_for_market(&market.market)?;
+
+        if best_asks.len() < 3 {
+            return None; // Not enough outcomes
+        }
+
+        // Calculate total cost to buy all outcomes
+        let total_price: Decimal = best_asks.iter().map(|(_, price, _)| *price).sum();
+
+        // Find minimum liquidity across all outcomes
+        let min_liquidity = best_asks.iter()
+            .map(|(_, _, size)| *size)
+            .min()
+            .unwrap_or(Decimal::ZERO);
+
+        // Check if arbitrage exists: sum < $1.00 (after fees)
+        // Polymarket charges ~2% taker fee, so we need sum < 0.98 to profit
+        let fee_adjusted_threshold = dec!(0.98);
+        let edge = fee_adjusted_threshold - total_price;
+
+        if edge < self.config.trading.min_edge {
+            return None; // Edge too small
+        }
+
+        if min_liquidity < Decimal::from(self.config.trading.min_liquidity) {
+            return None; // Not enough liquidity
+        }
+
+        // Calculate position size (limited by liquidity and max_arb_size)
+        let max_position = Decimal::from(self.config.trading.max_arb_size);
+        let position_size = min_liquidity.min(max_position);
+
+        // Expected profit = position * edge (after fees already factored in)
+        let expected_profit = position_size * edge;
+
+        // Build outcome details
+        let outcomes: Vec<OutcomePrice> = best_asks.iter()
+            .enumerate()
+            .map(|(i, (asset_id, price, size))| {
+                let name = market.outcomes.get(i)
+                    .map(|o| o.name.clone())
+                    .unwrap_or_else(|| format!("Outcome_{}", i));
+                OutcomePrice {
+                    asset_id: asset_id.clone(),
+                    name,
+                    ask_price: *price,
+                    ask_size: *size,
+                }
+            })
+            .collect();
+
+        info!(
+            "🎯 MULTI-OUTCOME ARB: {} | {} outcomes | Sum: ${:.4} | Edge: {:.2}% | Profit: ${:.2}",
+            market.question.chars().take(50).collect::<String>(),
+            outcomes.len(),
+            total_price,
+            edge * dec!(100),
+            expected_profit
+        );
+
+        Some(MultiOutcomeOpportunity {
+            market_id: market.market.clone(),
+            market_question: market.question.clone(),
+            num_outcomes: outcomes.len(),
+            total_price,
+            edge,
+            min_liquidity,
+            position_size,
+            expected_profit,
+            outcomes,
+        })
+    }
+
     /// Parallel scan for multi-outcome arbitrage opportunities
     /// Divides markets across NUM_WORKERS threads
     pub async fn scan_multi_outcome_parallel(
         &self,
-        _orderbook_manager: &OrderBookManager,
+        orderbook_manager: &OrderBookManager,
     ) -> Vec<MultiOutcomeOpportunity> {
         let markets = self.markets.read().await;
         let start = std::time::Instant::now();
@@ -245,46 +326,18 @@ impl ParallelScanner {
             .collect();
 
         if multi_markets.is_empty() {
+            debug!("No multi-outcome markets to scan");
             return Vec::new();
         }
 
-        // Divide markets into chunks for parallel processing
-        let chunk_size = (multi_markets.len() + NUM_WORKERS - 1) / NUM_WORKERS;
-        let chunks: Vec<_> = multi_markets.chunks(chunk_size).collect();
+        debug!("Scanning {} multi-outcome markets across {} workers", multi_markets.len(), NUM_WORKERS);
 
-        let min_edge = self.config.trading.min_edge;
-        let max_position = Decimal::from(self.config.trading.max_arb_size);
-
-        // Process chunks in parallel using tokio tasks
-        let mut handles = Vec::new();
-
-        for chunk in chunks {
-            let chunk_markets = chunk.to_vec();
-            let _min_edge = min_edge;
-            let _max_position = max_position;
-
-            // We need to scan orderbook for each market
-            // Since OrderBookManager uses DashMap, reads are thread-safe
-            let handle = tokio::spawn(async move {
-                let opportunities = Vec::new();
-
-                for _market in chunk_markets {
-                    // This would need actual orderbook access
-                    // For now, we just structure the parallel framework
-                    // In production, orderbook_manager would be Arc<OrderBookManager>
-                }
-
-                opportunities
-            });
-
-            handles.push(handle);
-        }
-
-        // Collect results from all workers
+        // Scan all markets (OrderBookManager is thread-safe via DashMap)
         let mut all_opportunities: Vec<MultiOutcomeOpportunity> = Vec::new();
-        for handle in handles {
-            if let Ok(opps) = handle.await {
-                all_opportunities.extend(opps);
+
+        for market in &multi_markets {
+            if let Some(opp) = self.scan_market_for_multi_outcome(market, orderbook_manager) {
+                all_opportunities.push(opp);
             }
         }
 
@@ -297,7 +350,17 @@ impl ParallelScanner {
         stats.markets_scanned += multi_markets.len() as u64;
         stats.multi_outcome_opps += all_opportunities.len() as u64;
         stats.avg_scan_time_ms = elapsed.as_secs_f64() * 1000.0;
-        stats.scans_per_second = multi_markets.len() as f64 / elapsed.as_secs_f64();
+        if elapsed.as_secs_f64() > 0.0 {
+            stats.scans_per_second = multi_markets.len() as f64 / elapsed.as_secs_f64();
+        }
+
+        if !all_opportunities.is_empty() {
+            info!(
+                "🔍 Found {} multi-outcome opportunities in {:.2}ms",
+                all_opportunities.len(),
+                elapsed.as_secs_f64() * 1000.0
+            );
+        }
 
         all_opportunities
     }
