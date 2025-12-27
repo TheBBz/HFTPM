@@ -6,9 +6,13 @@ use polymarket_client_sdk::clob::{
     types::{
         OrderType,
         Side,
+        SignedOrder as SdkSignedOrder,
+        PostOrderResponse,
+        CancelOrdersResponse,
+        BalanceAllowanceResponse,
     },
 };
-use polymarket_client_sdk::auth::state::Authenticated;
+use polymarket_client_sdk::auth::{state::Authenticated, Builder};
 use rust_decimal::Decimal;
 use std::sync::Arc;
 use anyhow::{Result, Context};
@@ -48,7 +52,7 @@ pub struct OrderResult {
 
 pub struct OrderExecutor {
     config: Arc<crate::utils::Config>,
-    clob_client: Client<Authenticated>,
+    clob_client: Client<Authenticated<Builder>>,
     signer: PrivateKeySigner,
 }
 
@@ -67,8 +71,8 @@ impl OrderExecutor {
         // Create unauthenticated client first
         let unauth_client = Client::new(&config.server.rest_url, clob_config)?;
 
-        // Authenticate the client
-        let clob_client = unauth_client
+        // Authenticate the client with Builder credentials
+        let clob_client: Client<Authenticated<Builder>> = unauth_client
             .authentication_builder(&signer)
             .authenticate()
             .await
@@ -167,7 +171,7 @@ impl OrderExecutor {
             let price = edge.price;
             let size = edge.size;
 
-            let order = self.clob_client
+            let signable_order = self.clob_client
                 .limit_order()
                 .token_id(&edge.asset_id)
                 .size(size)
@@ -178,8 +182,8 @@ impl OrderExecutor {
                 .await
                 .context("Failed to build order")?;
 
-            let sdk_signed_order = self.clob_client
-                .sign(&self.signer, order)
+            let sdk_signed_order: SdkSignedOrder = self.clob_client
+                .sign(&self.signer, signable_order)
                 .await
                 .context("Failed to sign order")?;
 
@@ -210,29 +214,51 @@ impl OrderExecutor {
 
     async fn submit_single_order(&self, signed_order: &SignedOrder) -> OrderResult {
         // Re-create and sign the order for submission
-        let order_result = async {
-            let order = self.clob_client
-                .limit_order()
-                .token_id(&signed_order.asset_id)
-                .size(signed_order.size)
-                .price(signed_order.price)
-                .side(Side::Buy)
-                .order_type(OrderType::FOK)
-                .build()
-                .await?;
+        let signable_order = match self.clob_client
+            .limit_order()
+            .token_id(&signed_order.asset_id)
+            .size(signed_order.size)
+            .price(signed_order.price)
+            .side(Side::Buy)
+            .order_type(OrderType::FOK)
+            .build()
+            .await
+        {
+            Ok(order) => order,
+            Err(e) => {
+                error!("❌ Failed to build order: {} - {}", signed_order.asset_id, e);
+                return OrderResult {
+                    asset_id: signed_order.asset_id.clone(),
+                    success: false,
+                    order_id: None,
+                    error: Some(e.to_string()),
+                };
+            }
+        };
 
-            let sdk_signed = self.clob_client
-                .sign(&self.signer, order)
-                .await?;
+        let sdk_signed: SdkSignedOrder = match self.clob_client
+            .sign(&self.signer, signable_order)
+            .await
+        {
+            Ok(signed) => signed,
+            Err(e) => {
+                error!("❌ Failed to sign order: {} - {}", signed_order.asset_id, e);
+                return OrderResult {
+                    asset_id: signed_order.asset_id.clone(),
+                    success: false,
+                    order_id: None,
+                    error: Some(e.to_string()),
+                };
+            }
+        };
 
-            self.clob_client
-                .post_order(sdk_signed)
-                .await
-        }.await;
+        let response: Result<Vec<PostOrderResponse>, _> = self.clob_client
+            .post_order(sdk_signed)
+            .await;
 
-        match order_result {
-            Ok(response) => {
-                info!("✅ Order submitted: {} - {:?}", signed_order.asset_id, response);
+        match response {
+            Ok(responses) => {
+                info!("✅ Order submitted: {} - {:?}", signed_order.asset_id, responses);
                 OrderResult {
                     asset_id: signed_order.asset_id.clone(),
                     success: true,
@@ -255,8 +281,8 @@ impl OrderExecutor {
     pub async fn cancel_open_orders(&self, _market_id: &str) -> Result<usize> {
         info!("🗑️  Cancelling orders");
 
-        let response = self.clob_client
-            .cancel_all()
+        let response: CancelOrdersResponse = self.clob_client
+            .cancel_all_orders()
             .await
             .context("Failed to cancel orders")?;
 
@@ -267,7 +293,7 @@ impl OrderExecutor {
     }
 
     pub async fn get_balance(&self) -> Result<Decimal> {
-        let response = self.clob_client
+        let response: BalanceAllowanceResponse = self.clob_client
             .balance_allowance()
             .await
             .context("Failed to get balance")?;
@@ -286,7 +312,7 @@ impl OrderExecutor {
     }
 
     #[inline]
-    fn calculate_order_hash<T>(&self, _signed_order: &T) -> String {
+    fn calculate_order_hash(&self, _signed_order: &SdkSignedOrder) -> String {
         use sha2::{Sha256, Digest};
 
         let mut hasher = Sha256::new();
