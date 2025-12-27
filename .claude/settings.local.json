@@ -8,7 +8,8 @@
       "Bash(rustup default:*)",
       "Bash(rustc --version:*)",
       "Bash(cargo:*)",
-      "Bash(git rm:*)"
+      "Bash(git rm:*)",
+      "Bash(ssh:*)"
     ]
   }
 }

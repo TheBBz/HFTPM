@@ -159,8 +159,10 @@ impl ParallelScanner {
         info!("✅ Built correlation graph: {} relationships in {:?}", correlations.len(), elapsed);
 
         // Store correlations
-        let mut corr_lock = self.correlations.write().await;
-        *corr_lock = correlations;
+        {
+            let mut corr_lock = self.correlations.write().await;
+            *corr_lock = correlations;
+        } // Drop write lock before acquiring read lock
 
         // Build relationship cache for O(1) lookups
         let corr_read = self.correlations.read().await;
