@@ -14,20 +14,20 @@ signature_type = 2  # 0=EOA, 1=Proxy/Magic, 2=Gnosis Safe
 
 [trading]
 trading_mode = "simulation"  # "live" or "simulation" - Start in simulation for safety
-bankroll = 2500  # $2.5K starting capital (mid-range for $1K-5K scale)
-max_arb_size = 300  # $300 max per trade (~12% of bankroll, RN1-inspired)
+bankroll = 1000  # $1K starting capital
+max_arb_size = 120  # $120 max per trade (~12% of bankroll, RN1-inspired)
 min_edge = 0.020  # 2.0% minimum edge (more aggressive than 2.5%)
-min_liquidity = 150  # $150 minimum liquidity (higher threshold)
+min_liquidity = 100  # $100 minimum liquidity
 max_order_books = 5000  # Maximum number of markets to track
 tick_size = "0.01"
 order_type = "FOK"  # Fill-Or-Kill for instant execution
 slippage_tolerance = 0.015  # 1.5% slippage tolerance (NOW USED in execution)
 
 [risk]
-max_exposure_per_market = 400  # $400 per market (was $200, scaled up)
-max_exposure_per_event = 800  # $800 per event (was $500, scaled up)
-max_concurrent_arbs = 25  # 25 simultaneous positions (was 20)
-daily_loss_limit = 100  # $100 daily loss limit (was $50)
+max_exposure_per_market = 200  # $200 per market (20% of bankroll)
+max_exposure_per_event = 400  # $400 per event (40% of bankroll)
+max_concurrent_arbs = 20  # 20 simultaneous positions
+daily_loss_limit = 50  # $50 daily loss limit (5% of bankroll)
 max_gas_gwei = 100  # Don't trade if gas > 100 gwei
 position_timeout_seconds = 86400  # Auto-exit positions older than 24h
 inventory_drift_threshold = 0.05  # 5% drift threshold
