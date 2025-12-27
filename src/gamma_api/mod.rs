@@ -6,6 +6,12 @@ use std::sync::Arc;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventInfo {
+    pub id: String,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Market {
     pub id: String,
     pub question: String,
@@ -29,6 +35,16 @@ pub struct Market {
     pub closed: bool,
     #[serde(rename = "enableOrderBook", default)]
     pub enable_order_book: bool,
+    /// Events this market belongs to - markets with the same event_id are related
+    #[serde(default)]
+    pub events: Vec<EventInfo>,
+}
+
+impl Market {
+    /// Get the primary event ID for this market (used for correlation grouping)
+    pub fn event_id(&self) -> Option<&str> {
+        self.events.first().map(|e| e.id.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

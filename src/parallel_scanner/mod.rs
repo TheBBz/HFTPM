@@ -128,19 +128,28 @@ impl ParallelScanner {
         info!("🔗 Building market correlation graph...");
         let start = std::time::Instant::now();
 
-        // Group markets by category/event
-        let mut category_groups: HashMap<String, Vec<&Market>> = HashMap::new();
+        // Group markets by event_id (markets in the same event are related)
+        let mut event_groups: HashMap<String, Vec<&Market>> = HashMap::new();
         for market in markets.iter() {
-            if let Some(ref tag) = market.ticker_tag {
-                category_groups.entry(tag.clone()).or_default().push(market);
+            // Use event_id for grouping - this is the key for cross-market correlation!
+            if let Some(event_id) = market.event_id() {
+                event_groups.entry(event_id.to_string()).or_default().push(market);
             }
         }
+        
+        // Log how many multi-market events we found
+        let multi_market_events: Vec<_> = event_groups.iter()
+            .filter(|(_, group)| group.len() >= 2)
+            .collect();
+        info!("📊 Found {} events with multiple markets", multi_market_events.len());
 
-        // Find related markets within each category
-        for (_category, group) in &category_groups {
+        // Find related markets within each event
+        for (event_id, group) in &event_groups {
             if group.len() < 2 {
                 continue;
             }
+            
+            debug!("🔍 Event {} has {} related markets", event_id, group.len());
 
             for i in 0..group.len() {
                 for j in (i + 1)..group.len() {
