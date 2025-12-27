@@ -1,0 +1,74 @@
+[server]
+wss_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+rest_url = "https://clob.polymarket.com"
+gamma_url = "https://gamma-api.polymarket.com"
+polygon_rpc_url = "https://polygon-rpc.com"  # Replace with your QuickNode Pro URL
+
+[credentials]
+private_key = "YOUR_PRIVATE_KEY_HERE"  # 0x-prefixed hex string
+api_key = "YOUR_API_KEY_HERE"
+api_secret = "YOUR_API_SECRET_HERE"
+api_passphrase = "YOUR_API_PASSPHRASE_HERE"
+funder_address = "YOUR_FUNDER_ADDRESS_HERE"  # Your proxy wallet address
+signature_type = 2  # 0=EOA, 1=Proxy/Magic, 2=Gnosis Safe
+
+[trading]
+bankroll = 1000  # USDC
+max_arb_size = 100  # Max $ per arbitrage (will scale dynamically)
+min_edge = 0.025  # 2.5% minimum profit threshold
+min_liquidity = 100  # $100 minimum liquidity per leg
+max_order_books = 5000  # Maximum number of markets to track
+tick_size = "0.01"
+order_type = "FOK"  # Fill-Or-Kill for instant execution
+slippage_tolerance = 0.01  # 1% slippage tolerance
+
+[risk]
+max_exposure_per_market = 200  # $200 max per market
+max_exposure_per_event = 500  # $500 max per event (all outcomes)
+max_concurrent_arbs = 20  # Maximum simultaneous arbitrage positions
+daily_loss_limit = 50  # Stop trading if lose $50 in a day
+max_gas_gwei = 100  # Don't trade if gas > 100 gwei
+position_timeout_seconds = 86400  # Auto-exit positions older than 24h
+inventory_drift_threshold = 0.05  # Rebalance if delta > 5%
+
+[markets]
+prioritize_categories = ["sports", "esports", "politics", "crypto"]
+blacklisted_markets = []
+min_volume_24h = 1000  # $1000 minimum 24h volume
+min_traders_24h = 10  # Minimum 10 traders in 24h
+min_order_book_depth = 10  # Minimum 10 price levels
+
+[execution]
+max_latency_ms = 150  # Target end-to-end latency
+websocket_ping_interval_secs = 10
+websocket_reconnect_delay_ms = 1000
+max_retries = 5
+retry_backoff_ms = 100
+http_timeout_secs = 5
+connection_pool_size = 10
+
+[monitoring]
+log_level = "info"
+enable_dashboard = true
+dashboard_port = 3000
+enable_tracing = true
+log_file = "logs/hfptm.log"
+metrics_retention_hours = 24
+
+[alerts]
+enable_telegram = false
+telegram_bot_token = ""
+telegram_chat_id = ""
+alert_on_trade_usd = 25  # Alert on trades >$25
+alert_on_error = true
+alert_on_latency_spike = true
+latency_spike_threshold_ms = 200
+alert_on_pnl_drawdown = true
+pnl_drawdown_threshold_usd = 100
+
+[latency]
+enable_cpu_pinning = true
+target_cpu_core = 0  # Pin trading loop to CPU 0
+use_jemalloc = true
+max_orderbook_updates_per_sec = 10000
+enable_zero_copy = true

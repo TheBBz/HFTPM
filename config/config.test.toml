@@ -1,0 +1,24 @@
+[trading]
+bankroll = 1000              # Your full bankroll
+max_arb_size = 50            # CONSERVATIVE for testing (reduce risk)
+min_edge = 0.020             # 2.0% threshold (more opportunities)
+min_liquidity = 100          # $100 minimum liquidity
+order_type = "FOK"           # Fill-Or-Kill for instant execution
+
+[risk]
+max_exposure_per_market = 50   # Very conservative exposure
+max_exposure_per_event = 150    # Conservative event exposure
+max_concurrent_arbs = 3      # Limit concurrent arbs during testing
+daily_loss_limit = 20         # Stop after $20 loss (testing)
+
+[markets]
+prioritize_categories = ["sports"]  # Focus on sports only for testing
+blacklisted_markets = []     # No blacklists during testing
+
+[monitoring]
+enable_dashboard = true
+dashboard_port = 3000
+
+[alerts]
+enable_telegram = true
+alert_on_trade_usd = 10      # Alert on test trades >$10

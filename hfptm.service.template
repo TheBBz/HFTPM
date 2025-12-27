@@ -1,0 +1,24 @@
+[Unit]
+Description=HFTPM Polymarket Arbitrage Bot
+After=network-online.target
+
+[Service]
+Type=simple
+User=hfptm
+WorkingDirectory=/home/hfptm/HFTPM
+ExecStart=/home/hfptm/HFTPM/target/release/hfptm
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables (optional)
+# Environment="production"
+# RUST_LOG=info
+
+# Resource limits (optional)
+# LimitNOFILE=65536
+# LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target
