@@ -18,7 +18,7 @@ use tracing::{info, warn, error, debug, instrument};
 
 const PING_INTERVAL: Duration = Duration::from_secs(10);
 const RECONNECT_DELAY: Duration = Duration::from_millis(1000);
-const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
+const MAX_MESSAGE_SIZE: usize = 5 * 1024 * 1024; // 5MB for initial orderbook snapshots
 
 pub struct WebSocketClient {
     config: Arc<Config>,
