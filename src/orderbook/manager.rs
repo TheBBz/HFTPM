@@ -194,6 +194,7 @@ impl MarketBooks {
 }
 
 pub struct OrderBookManager {
+    #[allow(dead_code)]
     config: Arc<Config>,
     market_books: DashMap<String, MarketBooks>,
 }

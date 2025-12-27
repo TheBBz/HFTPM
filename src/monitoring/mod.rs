@@ -19,6 +19,7 @@ use chrono::Utc;
 use rust_decimal::Decimal;
 
 const MAX_RECENT_TRADES: usize = 100;
+#[allow(dead_code)]
 const MAX_METRICS_RETENTION_HOURS: u64 = 24;
 
 #[derive(Debug, Deserialize)]

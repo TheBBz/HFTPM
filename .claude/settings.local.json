@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo check:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(rustup default:*)",
+      "Bash(rustc --version:*)",
+      "Bash(cargo:*)"
+    ]
+  }
+}

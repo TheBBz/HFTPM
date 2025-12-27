@@ -321,7 +321,7 @@ impl ArbEngine {
         let edges: Vec<ArbEdge> = best_asks
             .iter()
             .enumerate()
-            .map(|(i, (asset_id, price, size))| ArbEdge {
+            .map(|(i, (asset_id, price, _size))| ArbEdge {
                 asset_id: asset_id.clone(),
                 outcome: format!("Outcome_{}", i),
                 price: *price,

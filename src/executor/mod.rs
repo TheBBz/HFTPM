@@ -51,6 +51,7 @@ pub struct OrderResult {
 }
 
 pub struct OrderExecutor {
+    #[allow(dead_code)]
     config: Arc<crate::utils::Config>,
     clob_client: Client<Authenticated<Normal>>,
     signer: PrivateKeySigner,
