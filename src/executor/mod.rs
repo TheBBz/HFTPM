@@ -12,7 +12,7 @@ use polymarket_client_sdk::clob::{
         BalanceAllowanceResponse,
     },
 };
-use polymarket_client_sdk::auth::{state::Authenticated, Builder};
+use polymarket_client_sdk::auth::{state::Authenticated, Normal};
 use rust_decimal::Decimal;
 use std::sync::Arc;
 use anyhow::{Result, Context};
@@ -52,7 +52,7 @@ pub struct OrderResult {
 
 pub struct OrderExecutor {
     config: Arc<crate::utils::Config>,
-    clob_client: Client<Authenticated<Builder>>,
+    clob_client: Client<Authenticated<Normal>>,
     signer: PrivateKeySigner,
 }
 
@@ -71,8 +71,8 @@ impl OrderExecutor {
         // Create unauthenticated client first
         let unauth_client = Client::new(&config.server.rest_url, clob_config)?;
 
-        // Authenticate the client with Builder credentials
-        let clob_client: Client<Authenticated<Builder>> = unauth_client
+        // Authenticate the client
+        let clob_client: Client<Authenticated<Normal>> = unauth_client
             .authentication_builder(&signer)
             .authenticate()
             .await
