@@ -305,23 +305,30 @@ impl WebSocketClient {
             }
         }
 
-        if let Some(arb_op) = arb_engine.detect_arbitrage(
+        // Only detect arbitrage if market exists (avoid crash on stale/skipped books)
+        match arb_engine.detect_arbitrage(
             orderbook_manager,
             &market_id,
             risk_manager,
-        )? {
-            monitor.record_arbitrage_detected(&arb_op).await;
+        ) {
+            Ok(Some(arb_op)) => {
+                monitor.record_arbitrage_detected(&arb_op).await;
 
-            // Check quality threshold before executing
-            if arb_engine.should_execute_opportunity(&arb_op) {
-                self.execute_arbitrage(
-                    &arb_op,
-                    risk_manager,
-                    executor,
-                    monitor,
-                ).await?;
-            } else {
-                debug!("⏭️  Skipping low-quality arbitrage");
+                // Check quality threshold before executing
+                if arb_engine.should_execute_opportunity(&arb_op) {
+                    self.execute_arbitrage(
+                        &arb_op,
+                        risk_manager,
+                        executor,
+                        monitor,
+                    ).await?;
+                } else {
+                    debug!("⏭️  Skipping low-quality arbitrage");
+                }
+            }
+            Ok(None) => {},
+            Err(e) => {
+                debug!("⏭️  Skipping arbitrage detection for {}: {}", market_id, e);
             }
         }
 
@@ -368,23 +375,30 @@ impl WebSocketClient {
             }
         }
 
-        if let Some(arb_op) = arb_engine.detect_arbitrage(
+        // Only detect arbitrage if market exists (avoid crash on stale/skipped books)
+        match arb_engine.detect_arbitrage(
             orderbook_manager,
             &market_id,
             risk_manager,
-        )? {
-            monitor.record_arbitrage_detected(&arb_op).await;
+        ) {
+            Ok(Some(arb_op)) => {
+                monitor.record_arbitrage_detected(&arb_op).await;
 
-            // Check quality threshold before executing
-            if arb_engine.should_execute_opportunity(&arb_op) {
-                self.execute_arbitrage(
-                    &arb_op,
-                    risk_manager,
-                    executor,
-                    monitor,
-                ).await?;
-            } else {
-                debug!("⏭️  Skipping low-quality arbitrage");
+                // Check quality threshold before executing
+                if arb_engine.should_execute_opportunity(&arb_op) {
+                    self.execute_arbitrage(
+                        &arb_op,
+                        risk_manager,
+                        executor,
+                        monitor,
+                    ).await?;
+                } else {
+                    debug!("⏭️  Skipping low-quality arbitrage");
+                }
+            }
+            Ok(None) => {},
+            Err(e) => {
+                debug!("⏭️  Skipping arbitrage detection for {}: {}", market_id, e);
             }
         }
 
