@@ -172,6 +172,7 @@ impl WebSocketClient {
                             message_count += 1;
 
                             if ws_msg.is_book_snapshot() {
+                                debug!("📖 Book snapshot for market: {}", ws_msg.market);
                                 self.handle_book_snapshot(
                                     &ws_msg,
                                     orderbook_manager,
@@ -181,6 +182,7 @@ impl WebSocketClient {
                                     monitor,
                                 ).await?;
                             } else if ws_msg.is_price_change() {
+                                debug!("💹 Price change for market: {}", ws_msg.market);
                                 self.handle_price_change(
                                     &ws_msg,
                                     orderbook_manager,
@@ -189,6 +191,8 @@ impl WebSocketClient {
                                     executor,
                                     monitor,
                                 ).await?;
+                            } else {
+                                debug!("❓ Unknown message type: {:?}", &text[..text.len().min(200)]);
                             }
 
                             let elapsed = start_time.elapsed();
@@ -215,7 +219,7 @@ impl WebSocketClient {
                             }
                         }
                         Err(e) => {
-                            debug!("Failed to parse WebSocket message: {:?}", e);
+                            warn!("Failed to parse WebSocket message: {} | Sample: {}", e, &text[..text.len().min(300)]);
                         }
                     }
                 }

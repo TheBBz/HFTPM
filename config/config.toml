@@ -49,7 +49,7 @@ http_timeout_secs = 5
 connection_pool_size = 10
 
 [monitoring]
-log_level = "info"
+log_level = "debug"
 enable_dashboard = true
 dashboard_port = 3000
 enable_tracing = true
