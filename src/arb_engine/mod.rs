@@ -3,10 +3,11 @@ use crate::risk::RiskManager;
 use crate::utils::Config;
 use crate::utils::ScopedTimer;
 use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use std::time::Instant;
+use std::sync::Arc;
 use anyhow::{Result, Context};
-use tracing::{info, debug, warn};
+use tracing::{info, debug};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArbitrageOpportunity {
@@ -27,6 +28,15 @@ pub struct ArbitrageOpportunity {
 pub enum ArbType {
     Binary,
     MultiOutcome,
+}
+
+impl std::fmt::Display for ArbType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArbType::Binary => write!(f, "Binary"),
+            ArbType::MultiOutcome => write!(f, "MultiOutcome"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,7 +234,7 @@ impl ArbEngine {
             expected_profit_usd: net_profit + fee_cost,
             fee_cost,
             net_profit,
-            timestamp: Instant::now()
+            timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as i64,
@@ -328,7 +338,7 @@ impl ArbEngine {
             expected_profit_usd: net_profit + fee_cost,
             fee_cost,
             net_profit,
-            timestamp: Instant::now()
+            timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as i64,

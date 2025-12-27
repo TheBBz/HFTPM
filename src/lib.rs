@@ -12,12 +12,13 @@ pub use orderbook::{OrderBook, OrderBookManager};
 pub use arb_engine::{ArbEngine, ArbitrageOpportunity};
 pub use executor::{OrderExecutor, SignedOrder};
 pub use risk::{RiskManager, Position, Inventory};
-pub use monitoring::{Metrics, Monitor, AlertSender};
+pub use monitoring::{Metrics, Monitor};
 pub use gamma_api::GammaClient;
 pub use utils::{Config, LatencyTracker, setup_tracing};
 
 use anyhow::Result;
 use tracing::info;
+use std::sync::Arc;
 
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
@@ -38,14 +39,14 @@ pub async fn run() -> Result<()> {
 
     info!("🚀 HFTPM Ultra-Low-Latency Arbitrage Bot Starting");
     info!("📊 Bankroll: ${} USDC", config.trading.bankroll);
-    info!("🎯 Min Edge: {:.2}%", config.trading.min_edge * 100.0);
+    info!("🎯 Min Edge: {:.2}%", config.trading.min_edge * rust_decimal::Decimal::ONE_HUNDRED);
 
-    let mut orderbook_manager = OrderBookManager::new(&config)?;
-    let mut arb_engine = ArbEngine::new(&config)?;
-    let mut risk_manager = RiskManager::new(&config)?;
+    let orderbook_manager = OrderBookManager::new(&config)?;
+    let arb_engine = ArbEngine::new(&config);
+    let risk_manager = RiskManager::new(&config);
     let executor = OrderExecutor::new(&config).await?;
-    let mut monitor = Monitor::new(&config, executor.clone()).await?;
-    let gamma_client = GammaClient::new(&config.gamma_url).await?;
+    let monitor = Monitor::new(&config, executor).await?;
+    let gamma_client = GammaClient::new(&config.server.gamma_url);
 
     let markets = gamma_client.fetch_markets(&config.markets).await?;
     info!("📈 Loaded {} markets from Gamma API", markets.len());

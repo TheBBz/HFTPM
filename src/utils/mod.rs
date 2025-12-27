@@ -118,9 +118,9 @@ pub struct LatencyConfig {
 impl Config {
     pub fn load() -> Result<Self> {
         let settings = ConfigLoader::builder()
-            .add_source(ConfigLoader::from(
+            .add_source(
                 Environment::default().prefix("HFTPM").separator("__")
-            ))
+            )
             .build()?;
 
         let mut config: Config = settings.try_deserialize()
@@ -155,7 +155,7 @@ pub fn setup_tracing(log_level: &str, log_file: &str) {
 
     let file_appender = tracing_appender::rolling::daily(
         Path::new(log_file).parent().unwrap_or_else(|| Path::new(".")),
-        Path::new(log_file).file_name().unwrap_or("hfptm.log"),
+        Path::new(log_file).file_name().unwrap_or_else(|| std::ffi::OsStr::new("hfptm.log")),
     );
 
     tracing_subscriber::registry()

@@ -79,7 +79,7 @@ impl RiskManager {
 
     #[inline]
     pub fn can_execute_arbitrage(
-        &self,
+        &mut self,
         arb_op: &ArbitrageOpportunity,
     ) -> Result<bool> {
         let today = Utc::now().format("%Y-%m-%d").to_string();

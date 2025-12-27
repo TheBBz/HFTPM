@@ -8,13 +8,13 @@ use axum::{
     routing::get,
     Router,
 };
-use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
 use std::collections::VecDeque;
 use anyhow::Result;
-use tracing::{info, warn, error, debug};
+use tracing::{info, warn, error};
+use chrono::Utc;
 
 const MAX_RECENT_TRADES: usize = 100;
 const MAX_METRICS_RETENTION_HOURS: u64 = 24;
@@ -123,7 +123,7 @@ impl Monitor {
             alert_type: AlertType::ArbitrageDetected,
             message: format!("Arbitrage detected: {} ({:.2}% edge)", arb_op.market_id, arb_op.total_edge * rust_decimal::Decimal::ONE_HUNDRED),
             timestamp: Utc::now().timestamp(),
-            severity: if arb_op.total_edge > rust_decimal::from_str("0.04").unwrap() {
+            severity: if arb_op.total_edge > rust_decimal::Decimal::from_str("0.04").unwrap() {
                 AlertSeverity::Info
             } else {
                 AlertSeverity::Warning
@@ -335,7 +335,8 @@ impl Monitor {
             .route("/metrics", get(Self::metrics_handler))
             .route("/trades", get(Self::trades_handler))
             .route("/alerts", get(Self::alerts_handler))
-            .route("/health", get(Self::health_handler));
+            .route("/health", get(Self::health_handler))
+            .with_state((metrics, recent_trades, alerts));
 
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", config.monitoring.dashboard_port))
             .await
@@ -348,12 +349,14 @@ impl Monitor {
         });
     }
 
-    async fn metrics_handler(State(metrics): State<Arc<tokio::sync::RwLock<Metrics>>>) -> Json<Metrics> {
+    async fn metrics_handler(
+        State((metrics, _, _)): State<(Arc<tokio::sync::RwLock<Metrics>>, Arc<tokio::sync::RwLock<VecDeque<TradeRecord>>>, Arc<tokio::sync::RwLock<VecDeque<Alert>>>)>
+    ) -> Json<Metrics> {
         Json(metrics.read().await.clone())
     }
 
     async fn trades_handler(
-        State(recent_trades): State<Arc<tokio::sync::RwLock<VecDeque<TradeRecord>>>>,
+        State((_, recent_trades, _)): State<(Arc<tokio::sync::RwLock<Metrics>>, Arc<tokio::sync::RwLock<VecDeque<TradeRecord>>>, Arc<tokio::sync::RwLock<VecDeque<Alert>>>)>,
         Query(limit): Query<Option<usize>>,
     ) -> Json<Vec<TradeRecord>> {
         let trades = recent_trades.read().await;
@@ -370,7 +373,7 @@ impl Monitor {
     }
 
     async fn alerts_handler(
-        State(alerts): State<Arc<tokio::sync::RwLock<VecDeque<Alert>>>>,
+        State((_, _, alerts)): State<(Arc<tokio::sync::RwLock<Metrics>>, Arc<tokio::sync::RwLock<VecDeque<TradeRecord>>>, Arc<tokio::sync::RwLock<VecDeque<Alert>>>)>,
         Query(limit): Query<Option<usize>>,
     ) -> Json<Vec<Alert>> {
         let alerts_list = alerts.read().await;
@@ -396,7 +399,9 @@ impl Monitor {
     #[inline]
     pub fn get_metrics(&self) -> Metrics {
         tokio::task::block_in_place(|| {
-            self.metrics.read()
+            tokio::runtime::Handle::current().block_on(async {
+                self.metrics.read().await
+            })
         }).unwrap().clone()
     }
 }

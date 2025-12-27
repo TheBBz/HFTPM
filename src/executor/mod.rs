@@ -2,31 +2,23 @@ use crate::utils::{Config, ScopedTimer};
 use crate::arb_engine::ArbitrageOpportunity;
 use polymarket_client_sdk::clob::{
     Client,
-    Config as ClobConfig,
     types::{
-        Amount,
         OrderType,
         Side,
         SignatureType,
-        Order,
-        OrderArgs,
+        SignedOrder as SdkSignedOrder,
     },
 };
-use alloy_primitives::{Address, address};
-use alloy_signers::Signer as _;
-use alloy_signer_local::LocalSigner;
 use rust_decimal::Decimal;
 use std::sync::Arc;
 use anyhow::{Result, Context};
 use tracing::{info, error, warn, debug};
 use futures::future::join_all;
 use std::time::Instant;
-use chrono::Utc;
 
 #[derive(Debug, Clone)]
 pub struct SignedOrder {
-    pub order: Order,
-    pub order_args: OrderArgs,
+    pub order: SdkSignedOrder,
     pub order_hash: String,
     pub created_at: Instant,
 }
@@ -53,8 +45,7 @@ pub struct OrderResult {
 
 pub struct OrderExecutor {
     config: Arc<Config>,
-    clob_client: Arc<Client>,
-    signer: LocalSigner<alloy_signers::coins::Coins>,
+    clob_client: Arc<Client<polymarket_client_sdk::auth::Authenticated<polymarket_client_sdk::auth::Normal>>>,
 }
 
 impl OrderExecutor {
@@ -62,11 +53,8 @@ impl OrderExecutor {
         info!("🔐 Initializing order executor...");
 
         let private_key = config.credentials.private_key.clone();
-        let signer = LocalSigner::from_str(&private_key)
-            .context("Failed to parse private key")?
-            .with_chain_id(Some(137));
 
-        let clob_config = ClobConfig::default();
+        let clob_config = polymarket_client_sdk::clob::Config::default();
 
         let signature_type = match config.credentials.signature_type {
             0 => SignatureType::Eoa,
@@ -75,41 +63,28 @@ impl OrderExecutor {
             _ => return Err(anyhow::anyhow!("Invalid signature type")),
         };
 
-        let funder_address: Address = config.credentials.funder_address.parse()
-            .context("Failed to parse funder address")?;
-
-        let mut clob_client = Client::new(
-            &config.server.rest_url,
-            clob_config,
-        )?
-        .authentication_builder(&signer)
-        .funder(funder_address)
-        .signature_type(signature_type)
-        .authenticate()
-        .await
-        .context("Failed to authenticate CLOB client")?;
+        let clob_client = Client::new(&config.server.rest_url, clob_config)?;
 
         info!("✅ Order executor initialized");
         info!("📝 Signature type: {:?}", signature_type);
-        info!("💰 Funder address: {}", funder_address);
 
         Ok(Self {
             config: Arc::new(config.clone()),
             clob_client: Arc::new(clob_client),
-            signer,
         })
     }
 
-    #[inline]
-    pub async fn execute_arbitrage(
-        &self,
-        arb_op: ArbitrageOpportunity,
-    ) -> Result<ExecutionResult> {
-        let _timer = ScopedTimer::new("execution", None);
+    pub async fn execute_arbitrage(&self, arb_op: &ArbitrageOpportunity) -> Result<ExecutionResult> {
+        let _timer = ScopedTimer::new("execute_arbitrage");
+
+        info!(
+            "🎯 Executing arbitrage for market {}",
+            arb_op.market_id
+        );
 
         let start_time = Instant::now();
 
-        let signed_orders = self.create_signed_orders(&arb_op).await?;
+        let signed_orders = self.create_signed_orders(arb_op).await?;
 
         info!(
             "📦 Created {} signed orders for {}",
@@ -182,30 +157,23 @@ impl OrderExecutor {
             let price = edge.price;
             let size = edge.size;
 
-            let order_args = OrderArgs {
-                price: price.to_string().parse::<f64>()
-                    .context("Failed to parse price to f64")?,
-                size: size.to_string().parse::<f64>()
-                    .context("Failed to parse size to f64")?,
-                side: Side::Buy,
-                token_id: edge.asset_id.clone(),
-            };
+            let order_builder = self.clob_client.limit_order()
+                .token_id(&edge.asset_id)
+                .size(size)
+                .price(price)
+                .side(Side::Buy)
+                .order_type(OrderType::FOK);
 
-            let order = self.clob_client
-                .create_order(order_args.clone())
-                .await
+            let signable_order = order_builder.build().await
                 .context("Failed to create order")?;
 
-            let signed_order = self.clob_client
-                .sign(&self.signer, order.clone())
-                .await
+            let signed_order = self.clob_client.sign(&signable_order).await
                 .context("Failed to sign order")?;
 
-            let order_hash = self.calculate_order_hash(&order);
+            let order_hash = self.calculate_order_hash(&signed_order.order);
 
             signed_orders.push(SignedOrder {
-                order,
-                order_args,
+                order: signed_order,
                 order_hash,
                 created_at: Instant::now(),
             });
@@ -214,169 +182,91 @@ impl OrderExecutor {
         Ok(signed_orders)
     }
 
-    #[inline]
-    async fn submit_orders_parallel(
-        &self,
-        signed_orders: &[SignedOrder],
-    ) -> Result<Vec<OrderResult>> {
-        let client = Arc::clone(&self.clob_client);
+    async fn submit_orders_parallel(&self, signed_orders: &[SignedOrder]) -> Result<Vec<OrderResult>> {
+        let futures: Vec<_> = signed_orders
+            .iter()
+            .map(|signed_order| self.submit_single_order(signed_order))
+            .collect();
 
-        let results = join_all(
-            signed_orders.iter().map(|signed_order| {
-                let client = Arc::clone(&client);
-                let signed_order = signed_order.clone();
+        let results = join_all(futures).await;
 
-                async move {
-                    Self::submit_single_order(client, signed_order).await
-                }
-            })
-        ).await;
-
-        let order_results: Result<Vec<_>> = results.into_iter().collect();
-        order_results.context("Some order submissions failed")
+        Ok(results)
     }
 
-    #[inline]
-    async fn submit_single_order(
-        client: Arc<Client>,
-        signed_order: SignedOrder,
-    ) -> Result<OrderResult> {
-        let asset_id = signed_order.order_args.token_id.clone();
-        let order = signed_order.order.clone();
+    async fn submit_single_order(&self, signed_order: &SignedOrder) -> OrderResult {
+        let order_id = signed_order.order.order.orderId.to_string();
+        let asset_id = signed_order.order.order.tokenId.to_string();
 
-        let order_type = match client.clob_config.order_type.as_str() {
-            "FOK" => OrderType::Fok,
-            "FAK" => OrderType::Fak,
-            "GTC" => OrderType::Gtc,
-            "GTD" => OrderType::Gtd,
-            _ => OrderType::Gtc,
-        };
-
-        let result = tokio::time::timeout(
-            Duration::from_secs(client.clob_config.http_timeout_secs),
-            client.post_order(signed_order.order.clone(), order_type.clone()),
-        ).await;
-
-        match result {
-            Ok(Ok(response)) => {
-                debug!("✅ Order submitted: {:?}, response: {:?}", asset_id, response);
-
-                Ok(OrderResult {
+        match self.clob_client.post_order(signed_order.order.clone()).await {
+            Ok(response) => {
+                info!("✅ Order submitted: {} - {:?}", order_id, response);
+                OrderResult {
                     asset_id,
                     success: true,
-                    order_id: Some(response.order_id),
+                    order_id: Some(order_id),
                     error: None,
-                })
+                }
             }
-            Ok(Err(e)) => {
-                error!("❌ Order submission failed for {}: {:?}", asset_id, e);
-                Ok(OrderResult {
+            Err(e) => {
+                error!("❌ Order failed: {} - {}", order_id, e);
+                OrderResult {
                     asset_id,
                     success: false,
                     order_id: None,
                     error: Some(e.to_string()),
-                })
+                }
             }
-            Err(_) => {
-                warn!("⏱️  Order submission timed out for {}", asset_id);
-                Ok(OrderResult {
-                    asset_id,
-                    success: false,
-                    order_id: None,
-                    error: Some("Timeout".to_string()),
-                })
+        }
+    }
+
+    pub async fn cancel_open_orders(&self, market_id: &str) -> Result<usize> {
+        info!("🗑️  Cancelling orders for market {}", market_id);
+
+        let response = self.clob_client.cancel_all_orders().await
+            .context("Failed to cancel orders")?;
+
+        let cancel_count = response.canceled_orders.len();
+        info!("✅ Cancelled {} orders", cancel_count);
+
+        Ok(cancel_count)
+    }
+
+    pub async fn get_balance(&self) -> Result<Decimal> {
+        use polymarket_client_sdk::clob::types::BalanceAllowanceRequest;
+
+        let request = BalanceAllowanceRequest::default();
+        let response = self.clob_client.balance_allowance(&request).await
+            .context("Failed to get balance")?;
+
+        Ok(Decimal::from(response.balance))
+    }
+
+    pub async fn health_check(&self) -> Result<bool> {
+        match self.clob_client.ok().await {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                warn!("Health check failed: {}", e);
+                Ok(false)
             }
         }
     }
 
     #[inline]
-    fn calculate_order_hash(&self, order: &Order) -> String {
-        use sha2::Digest;
-        use sha2::Sha256;
+    fn calculate_order_hash(&self, signed_order: &SdkSignedOrder) -> String {
+        use sha2::{Sha256, Digest};
+        use hex;
 
         let mut hasher = Sha256::new();
 
-        hasher.update(order.token_id.as_bytes());
-        hasher.update(order.maker_amount.as_bytes());
-        hasher.update(order.taker_amount.as_bytes());
-        hasher.update(order.expiration.as_bytes());
-        hasher.update(order.nonce.as_bytes());
+        let order = &signed_order.order;
+
+        hasher.update(order.tokenId.as_le_bytes::<32>());
+        hasher.update(order.makerAmount.as_le_bytes::<32>());
+        hasher.update(order.takerAmount.as_le_bytes::<32>());
+        hasher.update(order.expiration.as_le_bytes::<32>());
+        hasher.update(order.nonce.as_le_bytes::<32>());
 
         let result = hasher.finalize();
-
         hex::encode(result)
-    }
-
-    #[inline]
-    pub async fn cancel_all_orders(&self) -> Result<()> {
-        info!("🗑️  Canceling all open orders...");
-
-        let open_orders = self.clob_client
-            .get_open_orders()
-            .await
-            .context("Failed to fetch open orders")?;
-
-        if open_orders.is_empty() {
-            info!("No open orders to cancel");
-            return Ok(());
-        }
-
-        let client = Arc::clone(&self.clob_client);
-
-        let results = join_all(
-            open_orders.iter().map(|order| {
-                let client = Arc::clone(&client);
-                let order_id = order.id.clone();
-
-                async move {
-                    let result = tokio::time::timeout(
-                        Duration::from_secs(5),
-                        client.cancel_order(order_id)
-                    ).await;
-
-                    match result {
-                        Ok(Ok(_)) => {
-                            info!("✅ Cancelled order: {}", order_id);
-                            Ok(true)
-                        }
-                        Ok(Err(e)) => {
-                            error!("❌ Failed to cancel order {}: {:?}", order_id, e);
-                            Ok(false)
-                        }
-                        Err(_) => {
-                            warn!("⏱️  Cancel order timed out: {}", order_id);
-                            Ok(false)
-                        }
-                    }
-                }
-            })
-        ).await;
-
-        let cancel_count = results.into_iter()
-            .filter_map(|r| r.ok())
-            .filter(|&success| success)
-            .count();
-
-        info!("✅ Cancelled {}/{} orders", cancel_count, open_orders.len());
-
-        Ok(())
-    }
-
-    #[inline]
-    pub async fn get_balances(&self) -> Result<Vec<(String, Decimal)>> {
-        let balances = self.clob_client
-            .get_balances()
-            .await
-            .context("Failed to fetch balances")?;
-
-        Ok(balances.into_iter()
-            .filter_map(|balance| {
-                Some((
-                    balance.token_id.clone(),
-                    balance.amount.parse::<Decimal>().ok()?,
-                ))
-            })
-            .collect()
-        )
     }
 }
