@@ -46,32 +46,25 @@ impl WebSocketClient {
     }
 
     pub async fn subscribe_all_markets(&mut self) -> Result<()> {
-        let markets_to_subscribe: Vec<String> = self.markets
+        // Just mark markets as needing subscription - actual subscription happens in connect_and_run
+        for market in self.markets.iter().take(self.config.trading.max_order_books) {
+            self.subscribed_markets.insert(market.id.clone());
+        }
+        info!("📡 Prepared {} markets for subscription", self.subscribed_markets.len());
+        Ok(())
+    }
+
+    fn build_subscription_message(&self) -> String {
+        let asset_ids: Vec<String> = self.markets
             .iter()
-            .filter(|m| !self.subscribed_markets.contains(&m.id))
             .take(self.config.trading.max_order_books)
             .flat_map(|m| m.assets_ids.clone())
             .collect();
 
-        if markets_to_subscribe.is_empty() {
-            info!("📡 All {} markets already subscribed", self.subscribed_markets.len());
-            return Ok(());
-        }
-
-        info!("📡 Subscribing to {} markets...", markets_to_subscribe.len());
-
-        let subscribe_msg = serde_json::json!({
-            "asset_ids": markets_to_subscribe,
+        serde_json::json!({
+            "assets_ids": asset_ids,
             "type": "market"
-        });
-
-        debug!("Subscription message: {}", subscribe_msg);
-
-        for market in self.markets.iter().take(self.config.trading.max_order_books) {
-            self.subscribed_markets.insert(market.id.clone());
-        }
-
-        Ok(())
+        }).to_string()
     }
 
     #[instrument(skip(self, orderbook_manager, arb_engine, risk_manager, executor, monitor))]
@@ -120,6 +113,14 @@ impl WebSocketClient {
         info!("✅ WebSocket connected to {}", url);
 
         let (mut write, mut read) = ws_stream.split();
+
+        // Send subscription message immediately after connecting
+        let subscribe_msg = self.build_subscription_message();
+        info!("📡 Sending subscription for {} asset IDs...", 
+            self.markets.iter().take(self.config.trading.max_order_books).flat_map(|m| m.assets_ids.clone()).count());
+        write.send(Message::Text(subscribe_msg)).await
+            .context("Failed to send subscription message")?;
+        info!("✅ Subscription message sent");
 
         // Channel for sending messages to the write half
         let (tx, mut rx) = mpsc::channel::<Message>(100);

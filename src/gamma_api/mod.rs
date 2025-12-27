@@ -22,9 +22,13 @@ pub struct Market {
     #[serde(rename = "endDate")]
     pub end_date: Option<String>,
     #[serde(rename = "volume24hr", default)]
-    pub volume_24h: Option<u64>,
+    pub volume_24h: Option<f64>,
     #[serde(default)]
-    pub traders_24h: Option<u64>,
+    pub active: bool,
+    #[serde(default)]
+    pub closed: bool,
+    #[serde(rename = "enableOrderBook", default)]
+    pub enable_order_book: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,7 +168,7 @@ impl GammaClient {
         }
 
         if let Some(volume) = market.volume_24h {
-            if volume < config.min_volume_24h {
+            if volume < config.min_volume_24h as f64 {
                 debug!(
                     "Skipping low-volume market: {} (${} < ${})",
                     market.question,
@@ -175,16 +179,16 @@ impl GammaClient {
             }
         }
 
-        if let Some(traders) = market.traders_24h {
-            if traders < config.min_traders_24h {
-                debug!(
-                    "Skipping low-trader market: {} ({} traders < {})",
-                    market.question,
-                    traders,
-                    config.min_traders_24h
-                );
-                return false;
-            }
+        // Skip markets without order book enabled
+        if !market.enable_order_book {
+            debug!("Skipping market without order book: {}", market.question);
+            return false;
+        }
+
+        // Skip closed/inactive markets
+        if market.closed || !market.active {
+            debug!("Skipping closed/inactive market: {}", market.question);
+            return false;
         }
 
         if market.outcomes.is_empty() {
@@ -194,6 +198,11 @@ impl GammaClient {
 
         if market.outcomes.len() < 2 {
             debug!("Skipping single-outcome market: {}", market.question);
+            return false;
+        }
+
+        if market.assets_ids.is_empty() {
+            debug!("Skipping market with no asset IDs: {}", market.question);
             return false;
         }
 
@@ -265,7 +274,7 @@ impl GammaClient {
             .iter()
             .filter(|market| {
                 market.volume_24h
-                    .map_or(false, |vol| vol >= min_volume)
+                    .map_or(false, |vol| vol >= min_volume as f64)
             })
             .cloned()
             .collect()
