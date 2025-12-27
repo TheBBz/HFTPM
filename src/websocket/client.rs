@@ -167,59 +167,73 @@ impl WebSocketClient {
                         continue;
                     }
 
-                    match serde_json::from_str::<WsMessage>(&text) {
-                        Ok(ws_msg) => {
-                            message_count += 1;
-
-                            if ws_msg.is_book_snapshot() {
-                                debug!("📖 Book snapshot for market: {}", ws_msg.market);
-                                self.handle_book_snapshot(
-                                    &ws_msg,
-                                    orderbook_manager,
-                                    arb_engine,
-                                    risk_manager,
-                                    executor,
-                                    monitor,
-                                ).await?;
-                            } else if ws_msg.is_price_change() {
-                                debug!("💹 Price change for market: {}", ws_msg.market);
-                                self.handle_price_change(
-                                    &ws_msg,
-                                    orderbook_manager,
-                                    arb_engine,
-                                    risk_manager,
-                                    executor,
-                                    monitor,
-                                ).await?;
-                            } else {
-                                debug!("❓ Unknown message type: {:?}", &text[..text.len().min(200)]);
-                            }
-
-                            let elapsed = start_time.elapsed();
-                            if elapsed.as_secs() >= 1 {
-                                let msgs_per_sec = message_count as f64 / elapsed.as_secs_f64();
-                                if msgs_per_sec > self.config.latency.max_orderbook_updates_per_sec as f64 {
-                                    warn!(
-                                        "⚠️  High message rate: {:.2} msg/s (limit: {})",
-                                        msgs_per_sec,
-                                        self.config.latency.max_orderbook_updates_per_sec
-                                    );
-                                }
-
-                                if last_stats.elapsed().as_secs() >= 60 {
-                                    info!(
-                                        "📊 WebSocket stats: {:.2} msg/s, avg latency: {:.2}ms",
-                                        msgs_per_sec,
-                                        self.latency_tracker.avg_latency_ms()
-                                    );
-                                    last_stats = Instant::now();
-                                    message_count = 0;
-                                    start_time = Instant::now();
-                                }
+                    // Try to parse as array first, then fall back to single message
+                    let messages: Vec<WsMessage> = if text.trim_start().starts_with('[') {
+                        match serde_json::from_str::<Vec<WsMessage>>(&text) {
+                            Ok(msgs) => msgs,
+                            Err(e) => {
+                                warn!("Failed to parse message array: {} | Sample: {}", e, &text[..text.len().min(300)]);
+                                continue;
                             }
                         }
-                        Err(e) => {
-                            warn!("Failed to parse WebSocket message: {} | Sample: {}", e, &text[..text.len().min(300)]);
+                    } else {
+                        match serde_json::from_str::<WsMessage>(&text) {
+                            Ok(msg) => vec![msg],
+                            Err(e) => {
+                                warn!("Failed to parse message: {} | Sample: {}", e, &text[..text.len().min(300)]);
+                                continue;
+                            }
+                        }
+                    };
+
+                    for ws_msg in messages {
+                        message_count += 1;
+
+                        if ws_msg.is_book_snapshot() {
+                            debug!("📖 Book snapshot for market: {}", ws_msg.market);
+                            self.handle_book_snapshot(
+                                &ws_msg,
+                                orderbook_manager,
+                                arb_engine,
+                                risk_manager,
+                                executor,
+                                monitor,
+                            ).await?;
+                        } else if ws_msg.is_price_change() {
+                            debug!("💹 Price change for market: {}", ws_msg.market);
+                            self.handle_price_change(
+                                &ws_msg,
+                                orderbook_manager,
+                                arb_engine,
+                                risk_manager,
+                                executor,
+                                monitor,
+                            ).await?;
+                        } else {
+                            debug!("❓ Unknown message type for market: {}", ws_msg.market);
+                        }
+                    }
+
+                    let elapsed = start_time.elapsed();
+                    if elapsed.as_secs() >= 1 {
+                        let msgs_per_sec = message_count as f64 / elapsed.as_secs_f64();
+                        if msgs_per_sec > self.config.latency.max_orderbook_updates_per_sec as f64 {
+                            warn!(
+                                "⚠️  High message rate: {:.2} msg/s (limit: {})",
+                                msgs_per_sec,
+                                self.config.latency.max_orderbook_updates_per_sec
+                            );
+                        }
+
+                        if last_stats.elapsed().as_secs() >= 60 {
+                            info!(
+                                "📊 WebSocket stats: {:.2} msg/s, avg latency: {:.2}ms",
+                                msgs_per_sec,
+                                self.latency_tracker.avg_latency_ms()
+                            );
+                            last_stats = Instant::now();
+                            message_count = 0;
+                            start_time = Instant::now();
                         }
                     }
                 }
