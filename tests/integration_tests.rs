@@ -155,6 +155,7 @@ mod tests {
                 signature_type: 2u8,
             },
             trading: TradingConfig {
+                trading_mode: hfptm::utils::TradingMode::Simulation,
                 bankroll: 1000,
                 max_arb_size: 100,
                 min_edge: dec!(0.025),
