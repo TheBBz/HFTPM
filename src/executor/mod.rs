@@ -19,7 +19,7 @@ use anyhow::{Result, Context};
 use tracing::{info, error, warn};
 use futures::future::join_all;
 use std::time::Instant;
-use alloy::signers::local::PrivateKeySigner;
+use alloy::signers::{local::PrivateKeySigner, Signer};
 use std::collections::VecDeque;
 use serde::{Deserialize, Serialize};
 
@@ -206,9 +206,12 @@ impl OrderExecutor {
 
         let private_key = &config.credentials.private_key;
 
-        // Parse the private key for signing
-        let signer: PrivateKeySigner = private_key.parse()
+        // Parse the private key for signing with Polygon chain ID (137)
+        let mut signer: PrivateKeySigner = private_key.parse()
             .context("Failed to parse private key")?;
+        
+        // Set chain ID for Polygon
+        signer.set_chain_id(Some(137));
 
         let clob_config = ClobConfig::default();
 
