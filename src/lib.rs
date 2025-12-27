@@ -203,7 +203,8 @@ async fn run_periodic_strategies(
                 }
 
                 // Log scanner stats
-                info!("🔬 {}", parallel_scanner.get_stats().await);
+                let loaded_markets = orderbook_manager.get_all_market_ids().len();
+                info!("🔬 {} | 📚 {} books loaded", parallel_scanner.get_stats().await, loaded_markets);
             }
             _ = scan_interval.tick() => {
                 // Run parallel scans for arbitrage opportunities
