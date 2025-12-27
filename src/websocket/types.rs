@@ -1,10 +1,4 @@
-pub mod client;
-
-pub use client::{WebSocketClient, WsMessage, WsMessageHandler};
-
-use bytes::Bytes;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value as JsonValue};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WsMessage {
@@ -71,5 +65,18 @@ impl WsMessage {
                     .unwrap()
                     .as_millis() as i64
             })
+    }
+}
+
+impl BookSnapshot {
+    #[inline]
+    pub fn is_stale(&self, max_age_ms: u64) -> bool {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+
+        now - self.timestamp > max_age_ms as i64
     }
 }

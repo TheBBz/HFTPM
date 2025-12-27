@@ -5,11 +5,11 @@ use crate::arb_engine::ArbEngine;
 use crate::risk::RiskManager;
 use crate::executor::OrderExecutor;
 use crate::monitoring::Monitor;
-use crate::gamma_api::{GammaClient, Market};
+use crate::gamma_api::Market;
 
-use tokio_tungstenite::{tungstenite::protocol::Message, WebSocketStream};
-use futures_util::{StreamExt, SinkExt};
-use bytes::Bytes;
+use tokio_tungstenite::tungstenite::protocol::Message;
+use futures::{StreamExt, SinkExt};
+use tokio::sync::mpsc;
 use anyhow::{Result, Context};
 use std::sync::Arc;
 use std::collections::HashSet;
@@ -40,9 +40,9 @@ impl WebSocketClient {
     pub async fn subscribe_all_markets(&mut self) -> Result<()> {
         let markets_to_subscribe: Vec<String> = self.markets
             .iter()
-            .filter(|m| !self.subscribed_markets.contains(&m.token_id))
+            .filter(|m| !self.subscribed_markets.contains(&m.id))
             .take(self.config.trading.max_order_books)
-            .map(|m| m.token_id.clone())
+            .flat_map(|m| m.assets_ids.clone())
             .collect();
 
         if markets_to_subscribe.is_empty() {
@@ -59,8 +59,8 @@ impl WebSocketClient {
 
         debug!("Subscription message: {}", subscribe_msg);
 
-        for market_id in markets_to_subscribe {
-            self.subscribed_markets.insert(market_id);
+        for market in self.markets.iter().take(self.config.trading.max_order_books) {
+            self.subscribed_markets.insert(market.id.clone());
         }
 
         Ok(())
@@ -113,18 +113,34 @@ impl WebSocketClient {
 
         let (mut write, mut read) = ws_stream.split();
 
+        // Channel for sending messages to the write half
+        let (tx, mut rx) = mpsc::channel::<Message>(100);
+
+        // Clone tx for ping task
+        let ping_tx = tx.clone();
+
+        // Spawn ping task
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(PING_INTERVAL);
             loop {
                 interval.tick().await;
-                if let Err(e) = write.send(Message::Ping(vec![])).await {
-                    error!("Failed to send ping: {:?}", e);
+                if ping_tx.send(Message::Ping(vec![])).await.is_err() {
                     break;
                 }
             }
         });
 
-        let start_time = Instant::now();
+        // Spawn write task
+        tokio::spawn(async move {
+            while let Some(msg) = rx.recv().await {
+                if let Err(e) = write.send(msg).await {
+                    error!("Failed to send WebSocket message: {:?}", e);
+                    break;
+                }
+            }
+        });
+
+        let mut start_time = Instant::now();
         let mut message_count = 0u64;
         let mut last_stats = Instant::now();
 
@@ -135,14 +151,14 @@ impl WebSocketClient {
                 Message::Text(text) => {
                     let _timer = ScopedTimer::new("ws_message_processing", None);
 
-                    let bytes = Bytes::from(text.into_bytes());
+                    let text_bytes = text.as_bytes();
 
-                    if bytes.len() > MAX_MESSAGE_SIZE {
-                        warn!("Message too large: {} bytes", bytes.len());
+                    if text_bytes.len() > MAX_MESSAGE_SIZE {
+                        warn!("Message too large: {} bytes", text_bytes.len());
                         continue;
                     }
 
-                    match serde_json::from_slice::<WsMessage>(&bytes) {
+                    match serde_json::from_str::<WsMessage>(&text) {
                         Ok(ws_msg) => {
                             message_count += 1;
 
@@ -195,9 +211,7 @@ impl WebSocketClient {
                     }
                 }
                 Message::Ping(data) => {
-                    if let Err(e) = write.send(Message::Pong(data)).await {
-                        error!("Failed to send pong: {:?}", e);
-                    }
+                    let _ = tx.send(Message::Pong(data)).await;
                 }
                 Message::Pong(_) => {
                     debug!("Received pong");
@@ -224,7 +238,7 @@ impl WebSocketClient {
         executor: &OrderExecutor,
         monitor: &mut Monitor,
     ) -> Result<()> {
-        let _timer = ScopedTimer::new("book_snapshot", Some(&mut self.latency_tracker));
+        let _timer = ScopedTimer::new("book_snapshot", None);
 
         let market_id = ws_msg.market.clone();
         let asset_id = ws_msg.asset_id.clone();
@@ -247,8 +261,8 @@ impl WebSocketClient {
             .unwrap_or_default();
 
         let book = BookSnapshot {
-            market_id: market_id.clone(),
             asset_id: asset_id.clone(),
+            market: market_id.clone(),
             bids,
             asks,
             timestamp,
@@ -285,7 +299,7 @@ impl WebSocketClient {
         executor: &OrderExecutor,
         monitor: &mut Monitor,
     ) -> Result<()> {
-        let _timer = ScopedTimer::new("price_change", Some(&mut self.latency_tracker));
+        let _timer = ScopedTimer::new("price_change", None);
 
         let market_id = ws_msg.market.clone();
 
@@ -341,10 +355,9 @@ impl WebSocketClient {
 
         let execution_start = Instant::now();
 
-        match executor.execute_arbitrage(arb_op.clone()).await {
+        match executor.execute_arbitrage(arb_op).await {
             Ok(result) => {
                 let execution_time = execution_start.elapsed();
-                self.latency_tracker.record(execution_time.as_nanos() as u64);
 
                 risk_manager.record_arbitrage_execution(arb_op, &result)?;
 

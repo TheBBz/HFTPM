@@ -1,6 +1,5 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use rust_decimal::Decimal;
 use anyhow::{Result, Context};
 use tracing::{info, debug};
 use std::sync::Arc;
@@ -94,13 +93,14 @@ impl GammaClient {
                 .collect();
 
             let count = filtered_markets.len();
+            let is_empty = filtered_markets.is_empty();
             all_markets.extend(filtered_markets);
 
             debug!("Fetched {} markets on page {} (total: {})", count, page, all_markets.len());
 
             cursor = gamma_response.next_cursor.clone();
 
-            if cursor.is_none() || filtered_markets.is_empty() {
+            if cursor.is_none() || is_empty {
                 break;
             }
 

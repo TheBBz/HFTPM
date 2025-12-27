@@ -1,4 +1,4 @@
-use super::types::BookSnapshot;
+use crate::websocket::types::BookSnapshot;
 use crate::utils::Config;
 use anyhow::{Result, Context};
 use dashmap::DashMap;

@@ -1,4 +1,4 @@
-use crate::executor::{OrderExecutor, ExecutionResult};
+use crate::executor::ExecutionResult;
 use crate::arb_engine::ArbitrageOpportunity;
 use crate::risk::RiskManager;
 use crate::utils::{Config, LatencyTracker};
@@ -8,7 +8,7 @@ use axum::{
     routing::get,
     Router,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Serialize, Deserialize};
 use std::sync::Arc;
 use std::time::Instant;
 use std::collections::VecDeque;
@@ -16,9 +16,15 @@ use std::str::FromStr;
 use anyhow::Result;
 use tracing::{info, warn, error};
 use chrono::Utc;
+use rust_decimal::Decimal;
 
 const MAX_RECENT_TRADES: usize = 100;
 const MAX_METRICS_RETENTION_HOURS: u64 = 24;
+
+#[derive(Debug, Deserialize)]
+struct LimitQuery {
+    limit: Option<usize>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Metrics {
@@ -47,7 +53,7 @@ pub struct TradeRecord {
     pub success: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Alert {
     pub alert_type: AlertType,
     pub message: String,
@@ -55,7 +61,7 @@ pub struct Alert {
     pub severity: AlertSeverity,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum AlertType {
     TradeExecuted,
     ArbitrageDetected,
@@ -65,7 +71,7 @@ pub enum AlertType {
     RiskLimitBreached,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum AlertSeverity {
     Info,
     Warning,
@@ -75,7 +81,6 @@ pub enum AlertSeverity {
 
 pub struct Monitor {
     config: Arc<Config>,
-    executor: Arc<OrderExecutor>,
     metrics: Arc<tokio::sync::RwLock<Metrics>>,
     recent_trades: Arc<tokio::sync::RwLock<VecDeque<TradeRecord>>>,
     alerts: Arc<tokio::sync::RwLock<VecDeque<Alert>>>,
@@ -85,10 +90,9 @@ pub struct Monitor {
 }
 
 impl Monitor {
-    pub async fn new(config: &Config, executor: OrderExecutor) -> Result<Self> {
+    pub async fn new(config: &Config) -> Result<Self> {
         Ok(Self {
             config: Arc::new(config.clone()),
-            executor: Arc::new(executor),
             metrics: Arc::new(tokio::sync::RwLock::new(Self::empty_metrics())),
             recent_trades: Arc::new(tokio::sync::RwLock::new(VecDeque::with_capacity(MAX_RECENT_TRADES))),
             alerts: Arc::new(tokio::sync::RwLock::new(VecDeque::with_capacity(500))),
@@ -226,37 +230,12 @@ impl Monitor {
                 severity: AlertSeverity::Warning,
             };
 
-        let alert = Alert {
-            alert_type: AlertType::TradeExecuted,
-            message: format!(
-                "Trade executed: ${:.2} profit in {:.2}ms on {}",
-                arb_op.net_profit,
-                execution_time.as_millis(),
-                arb_op.market_id
-            ),
-            timestamp: Utc::now().timestamp(),
-            severity: AlertSeverity::Info,
-        };
+            let mut alerts = self.alerts.write().await;
+            alerts.push_back(alert.clone());
 
-        let mut alerts = self.alerts.write().await;
-        alerts.push_back(alert.clone());
-
-        while alerts.len() > 500 {
-            alerts.pop_front();
-        }
-
-        drop(alerts);
-
-        info!(
-            "✅ Arbitrage executed: {} in {:.2}ms (success: {})",
-            arb_op.market_id,
-            execution_time.as_secs_f64() * 1000.0,
-            result.success
-        );
-
-        if self.config.alerts.enable_telegram && arb_op.position_size >= self.config.alerts.alert_on_trade_usd.into() {
-            self.send_telegram_alert(&alert).await;
-        }
+            while alerts.len() > 500 {
+                alerts.pop_front();
+            }
 
             drop(alerts);
 
@@ -282,22 +261,6 @@ impl Monitor {
 
         while alerts.len() > 500 {
             alerts.pop_front();
-        }
-
-        drop(alerts);
-
-        error!("❌ {}", error_message);
-
-        if self.config.alerts.enable_telegram && self.config.alerts.alert_on_error {
-            self.send_telegram_alert(&alert).await;
-        }
-
-        drop(alerts);
-
-        warn!("⚠️  Latency spike: {}ms", current_latency_ms);
-
-        if self.config.alerts.alert_on_latency_spike {
-            self.send_telegram_alert(&alert).await;
         }
 
         drop(alerts);
@@ -400,10 +363,10 @@ impl Monitor {
 
     async fn trades_handler(
         State((_, recent_trades, _)): State<(Arc<tokio::sync::RwLock<Metrics>>, Arc<tokio::sync::RwLock<VecDeque<TradeRecord>>>, Arc<tokio::sync::RwLock<VecDeque<Alert>>>)>,
-        Query(limit): Query<Option<usize>>,
+        Query(query): Query<LimitQuery>,
     ) -> Json<Vec<TradeRecord>> {
         let trades = recent_trades.read().await;
-        let limit = limit.unwrap_or(50).min(MAX_RECENT_TRADES);
+        let limit = query.limit.unwrap_or(50).min(MAX_RECENT_TRADES);
 
         Json(
             trades
@@ -417,10 +380,10 @@ impl Monitor {
 
     async fn alerts_handler(
         State((_, _, alerts)): State<(Arc<tokio::sync::RwLock<Metrics>>, Arc<tokio::sync::RwLock<VecDeque<TradeRecord>>>, Arc<tokio::sync::RwLock<VecDeque<Alert>>>)>,
-        Query(limit): Query<Option<usize>>,
+        Query(query): Query<LimitQuery>,
     ) -> Json<Vec<Alert>> {
         let alerts_list = alerts.read().await;
-        let limit = limit.unwrap_or(50);
+        let limit = query.limit.unwrap_or(50);
 
         Json(
             alerts_list
@@ -445,6 +408,6 @@ impl Monitor {
             tokio::runtime::Handle::current().block_on(async {
                 self.metrics.read().await.clone()
             })
-        }).unwrap()
+        })
     }
 }

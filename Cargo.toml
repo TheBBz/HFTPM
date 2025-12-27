@@ -30,9 +30,10 @@ urlencoding = "2.1"
 sha2 = "0.10"
 
 polymarket-client-sdk = "0.1.2"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 hex = "0.4"
 tracing-appender = "0.2"
+alloy = { version = "1.1", features = ["signer-local"] }
 
 tikv-jemallocator = { version = "0.5", optional = true }
 

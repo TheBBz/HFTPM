@@ -18,7 +18,6 @@ pub use utils::{Config, LatencyTracker, setup_tracing};
 
 use anyhow::Result;
 use tracing::info;
-use std::sync::Arc;
 
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
@@ -41,17 +40,17 @@ pub async fn run() -> Result<()> {
     info!("📊 Bankroll: ${} USDC", config.trading.bankroll);
     info!("🎯 Min Edge: {:.2}%", config.trading.min_edge * rust_decimal::Decimal::ONE_HUNDRED);
 
-    let orderbook_manager = OrderBookManager::new(&config)?;
-    let arb_engine = ArbEngine::new(&config);
-    let risk_manager = RiskManager::new(&config);
+    let mut orderbook_manager = OrderBookManager::new(&config)?;
+    let mut arb_engine = ArbEngine::new(&config);
+    let mut risk_manager = RiskManager::new(&config);
     let executor = OrderExecutor::new(&config).await?;
-    let monitor = Monitor::new(&config, executor).await?;
+    let mut monitor = Monitor::new(&config).await?;
     let gamma_client = GammaClient::new(&config.server.gamma_url);
 
     let markets = gamma_client.fetch_markets(&config.markets).await?;
     info!("📈 Loaded {} markets from Gamma API", markets.len());
 
-    let ws_client: crate::websocket::WebSocketClient = WebSocketClient::new(&config, &markets).await?;
+    let mut ws_client: crate::websocket::WebSocketClient = WebSocketClient::new(&config, &markets).await?;
     ws_client.subscribe_all_markets().await?;
 
     tokio::select! {

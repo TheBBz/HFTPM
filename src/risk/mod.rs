@@ -4,7 +4,7 @@ use crate::utils::Config;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::sync::Arc;
-use anyhow::{Result, Context};
+use anyhow::Result;
 use tracing::{info, warn, debug};
 use chrono::Utc;
 

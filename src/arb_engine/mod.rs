@@ -1,7 +1,6 @@
 use crate::orderbook::OrderBookManager;
 use crate::risk::RiskManager;
 use crate::utils::Config;
-use crate::utils::ScopedTimer;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -84,7 +83,7 @@ impl ArbEngine {
         market_id: &str,
         risk_manager: &RiskManager,
     ) -> Result<Option<ArbitrageOpportunity>> {
-        let _timer = ScopedTimer::new("arb_detection", Some(&mut self.latency_tracker));
+        let start = std::time::Instant::now();
 
         let market_books = orderbook_manager.get_market_books(market_id)
             .context("Market not found")?;
@@ -112,6 +111,10 @@ impl ArbEngine {
             )?
         };
 
+        // Record latency after detection is done
+        let elapsed = start.elapsed().as_nanos() as u64;
+        self.latency_tracker.record(elapsed);
+
         if let Some(ref op) = arb_op {
             self.detections += 1;
             info!(
@@ -129,7 +132,7 @@ impl ArbEngine {
     fn detect_binary_arbitrage(
         &self,
         market_id: &str,
-        market_books: &crate::orderbook::MarketBooks,
+        _market_books: &crate::orderbook::MarketBooks,
         best_asks: &[(String, Decimal, Decimal)],
         risk_manager: &RiskManager,
     ) -> Result<Option<ArbitrageOpportunity>> {
@@ -247,7 +250,7 @@ impl ArbEngine {
     fn detect_multi_outcome_arbitrage(
         &self,
         market_id: &str,
-        market_books: &crate::orderbook::MarketBooks,
+        _market_books: &crate::orderbook::MarketBooks,
         best_asks: &[(String, Decimal, Decimal)],
         risk_manager: &RiskManager,
     ) -> Result<Option<ArbitrageOpportunity>> {
