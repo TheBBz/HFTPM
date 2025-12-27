@@ -187,10 +187,51 @@ impl ParallelScanner {
         let q_a = market_a.question.to_lowercase();
         let q_b = market_b.question.to_lowercase();
 
-        // Simple heuristics for detecting related markets
-        // In production, you'd use NLP/embeddings
+        // Extract price targets for threshold-based markets (e.g., "Bitcoin reach $X")
+        let price_a = self.extract_price_target(&q_a);
+        let price_b = self.extract_price_target(&q_b);
+        
+        // If both markets have price targets, determine parent-child relationship
+        if let (Some(pa), Some(pb)) = (price_a, price_b) {
+            let is_reach_a = q_a.contains("reach") || q_a.contains("hit") || q_a.contains("above");
+            let is_reach_b = q_b.contains("reach") || q_b.contains("hit") || q_b.contains("above");
+            let is_dip_a = q_a.contains("dip") || q_a.contains("fall") || q_a.contains("below") || q_a.contains("drop");
+            let is_dip_b = q_b.contains("dip") || q_b.contains("fall") || q_b.contains("below") || q_b.contains("drop");
+            
+            // For "reach $X" markets: higher price is child of lower price
+            // If it reaches $150k, it MUST have reached $100k first
+            if is_reach_a && is_reach_b && pa != pb {
+                let (parent, child) = if pa < pb {
+                    (market_a, market_b)  // Lower price is parent
+                } else {
+                    (market_b, market_a)  // Lower price is parent
+                };
+                return Some(MarketCorrelation {
+                    market_a: parent.market.clone(),
+                    market_b: child.market.clone(),
+                    correlation_type: CorrelationType::Parent,
+                    strength: 0.95,
+                });
+            }
+            
+            // For "dip to $X" markets: lower price is child of higher price
+            // If it dipped to $50k, it MUST have dipped to $90k first  
+            if is_dip_a && is_dip_b && pa != pb {
+                let (parent, child) = if pa > pb {
+                    (market_a, market_b)  // Higher price is parent
+                } else {
+                    (market_b, market_a)  // Higher price is parent
+                };
+                return Some(MarketCorrelation {
+                    market_a: parent.market.clone(),
+                    market_b: child.market.clone(),
+                    correlation_type: CorrelationType::Parent,
+                    strength: 0.95,
+                });
+            }
+        }
 
-        // Check for parent-child (e.g., "win championship" vs "win semifinal")
+        // Check for simple parent-child (e.g., "win championship" vs "win semifinal")
         let parent_keywords = ["championship", "final", "winner", "win"];
         let child_keywords = ["semifinal", "quarter", "round", "game"];
 
@@ -199,7 +240,6 @@ impl ParallelScanner {
         let b_is_child = child_keywords.iter().any(|k| q_b.contains(k));
 
         if a_is_parent && b_is_child {
-            // Check if they share common terms (team name, etc.)
             let common_words = self.find_common_significant_words(&q_a, &q_b);
             if common_words >= 2 {
                 return Some(MarketCorrelation {
@@ -211,9 +251,9 @@ impl ParallelScanner {
             }
         }
 
-        // Check for mutually exclusive (same event, different outcomes)
+        // Check for mutually exclusive markets (e.g., "Team A wins" vs "Team B wins")
         if self.find_common_significant_words(&q_a, &q_b) >= 3 {
-            // Markets about the same event might be related
+            // Markets about the same event with different subjects might be opposite
             return Some(MarketCorrelation {
                 market_a: market_a.market.clone(),
                 market_b: market_b.market.clone(),
@@ -222,6 +262,27 @@ impl ParallelScanner {
             });
         }
 
+        None
+    }
+    
+    /// Extract price target from question (e.g., "$100,000" -> 100000)
+    fn extract_price_target(&self, question: &str) -> Option<u64> {
+        // Match patterns like $100,000 or $100000 or $100k
+        let re_full = regex::Regex::new(r"\$(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)").ok()?;
+        let re_k = regex::Regex::new(r"\$(\d+(?:\.\d+)?)\s*k").ok()?;
+        
+        if let Some(cap) = re_k.captures(question) {
+            let num_str = cap.get(1)?.as_str();
+            let num: f64 = num_str.parse().ok()?;
+            return Some((num * 1000.0) as u64);
+        }
+        
+        if let Some(cap) = re_full.captures(question) {
+            let num_str = cap.get(1)?.as_str().replace(",", "");
+            let num: f64 = num_str.parse().ok()?;
+            return Some(num as u64);
+        }
+        
         None
     }
 
