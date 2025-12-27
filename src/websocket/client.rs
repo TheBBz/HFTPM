@@ -296,7 +296,14 @@ impl WebSocketClient {
             hash: ws_msg.hash.clone().unwrap_or_default(),
         };
 
-        orderbook_manager.update_book(&market_id, &asset_id, &book)?;
+        // Try to update book, skip if market not found
+        match orderbook_manager.update_book(&market_id, &asset_id, &book) {
+            Ok(_) => {},
+            Err(e) => {
+                debug!("⏭️  Skipping book update for unknown market {}: {}", market_id, e);
+                return Ok(());
+            }
+        }
 
         if let Some(arb_op) = arb_engine.detect_arbitrage(
             orderbook_manager,
@@ -344,13 +351,20 @@ impl WebSocketClient {
                 let size = change.size.parse::<rust_decimal::Decimal>()
                     .context("Failed to parse size")?;
 
-                orderbook_manager.update_price(
+                // Try to update price, skip if market not found
+                match orderbook_manager.update_price(
                     &market_id,
                     &change.asset_id,
                     price,
                     size,
                     change.side.as_str(),
-                )?;
+                ) {
+                    Ok(_) => {},
+                    Err(e) => {
+                        debug!("⏭️  Skipping price update for unknown market {}: {}", market_id, e);
+                        continue;
+                    }
+                }
             }
         }
 
