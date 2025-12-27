@@ -1,9 +1,6 @@
-mod lib;
-
 use std::env;
 use anyhow::Result;
-use tracing::{info, error};
-use tokio::signal;
+use tracing::error;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<()> {
@@ -12,7 +9,7 @@ async fn main() -> Result<()> {
     println!("🔗 GitHub: https://github.com/your-repo/HFTPM");
     println!();
 
-    if let Err(e) = lib::run().await {
+    if let Err(e) = hfptm::run().await {
         error!("💥 Fatal error: {:?}", e);
         std::process::exit(1);
     }

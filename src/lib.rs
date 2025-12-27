@@ -19,17 +19,16 @@ pub use utils::{Config, LatencyTracker, setup_tracing};
 use anyhow::Result;
 use tracing::info;
 
-#[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
-
 #[cfg(feature = "jemalloc")]
 use tikv_jemallocator::Jemalloc;
 
-#[cfg(not(feature = "jemalloc"))]
-use std::alloc::System;
+#[cfg(feature = "jemalloc")]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 #[cfg(not(feature = "jemalloc"))]
-type Jemalloc = System;
+#[global_allocator]
+static GLOBAL: std::alloc::System = std::alloc::System;
 
 pub async fn run() -> Result<()> {
     let config = Config::load()?;
@@ -50,7 +49,7 @@ pub async fn run() -> Result<()> {
     let markets = gamma_client.fetch_markets(&config.markets).await?;
     info!("📈 Loaded {} markets from Gamma API", markets.len());
 
-    let mut ws_client: crate::websocket::WebSocketClient = WebSocketClient::new(&config, &markets).await?;
+    let mut ws_client = WebSocketClient::new(&config, &markets).await?;
     ws_client.subscribe_all_markets().await?;
 
     tokio::select! {
