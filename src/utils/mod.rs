@@ -12,6 +12,16 @@ pub enum TradingMode {
     Simulation,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Strategy {
+    Arbitrage,      // Original YES+NO < 1.0 detection (rare opportunities)
+    MarketMaking,   // RN1-style: Place limit orders, earn spread + rewards
+    VolumeFarming,  // RN1-style: Buy cheap contracts for volume/airdrop
+    #[default]
+    Hybrid,         // All strategies combined (recommended)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
@@ -50,6 +60,8 @@ pub struct CredentialsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingConfig {
     pub trading_mode: TradingMode,
+    #[serde(default)]
+    pub strategy: Strategy,
     pub bankroll: u64,
     pub max_arb_size: u64,
     pub min_edge: rust_decimal::Decimal,
@@ -58,7 +70,31 @@ pub struct TradingConfig {
     pub tick_size: String,
     pub order_type: String,
     pub slippage_tolerance: rust_decimal::Decimal,
+    // Market Making parameters (RN1 strategy)
+    #[serde(default = "default_spread_bps")]
+    pub mm_spread_bps: u64,              // Spread in basis points (e.g., 100 = 1%)
+    #[serde(default = "default_order_size")]
+    pub mm_order_size: u64,              // Size per limit order in USD
+    #[serde(default = "default_max_orders")]
+    pub mm_max_orders_per_market: usize, // Max open orders per market
+    #[serde(default = "default_refresh_secs")]
+    pub mm_order_refresh_secs: u64,      // How often to refresh orders
+    // Volume Farming parameters (trash farming)
+    #[serde(default = "default_max_price")]
+    pub vf_max_price: rust_decimal::Decimal,  // Max price for trash contracts (e.g., 0.05)
+    #[serde(default = "default_min_volume")]
+    pub vf_min_volume_per_trade: u64,    // Min notional volume per trade
+    #[serde(default = "default_daily_budget")]
+    pub vf_daily_budget: u64,            // Daily budget for volume farming
 }
+
+fn default_spread_bps() -> u64 { 200 }        // 2% spread
+fn default_order_size() -> u64 { 50 }          // $50 per order
+fn default_max_orders() -> usize { 4 }         // 2 bids + 2 asks
+fn default_refresh_secs() -> u64 { 30 }        // Refresh every 30s
+fn default_max_price() -> rust_decimal::Decimal { rust_decimal::Decimal::new(5, 2) } // 0.05
+fn default_min_volume() -> u64 { 100 }         // $100 min volume per trash trade
+fn default_daily_budget() -> u64 { 20 }        // $20/day for volume farming
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RiskConfig {

@@ -291,6 +291,15 @@ impl OrderBookManager {
         self.market_books.get(market_id).map(|books| books.clone())
     }
 
+    /// Get a specific order book by market_id and asset_id
+    #[inline]
+    pub fn get_book(&self, market_id: &str, asset_id: &str) -> Option<OrderBook> {
+        let market_books = self.market_books.get(market_id)?;
+        market_books.books.iter()
+            .find(|book| book.asset_id == asset_id)
+            .cloned()
+    }
+
     #[inline]
     pub fn get_best_asks_for_market(&self, market_id: &str) -> Option<Vec<(String, Decimal, Decimal)>> {
         let market_books = self.get_market_books(market_id)?;
