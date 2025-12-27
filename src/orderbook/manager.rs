@@ -217,7 +217,7 @@ impl OrderBookManager {
             .entry(market_id.to_string())
             .or_insert_with(|| MarketBooks::new(market_id.to_string()));
 
-        let new_book = OrderBook::new(
+        let mut new_book = OrderBook::new(
             market_id.to_string(),
             asset_id.to_string(),
             snapshot.timestamp,
@@ -226,27 +226,30 @@ impl OrderBookManager {
 
         new_book.update_from_snapshot(snapshot);
 
-        let updated = {
-            let books = &mut market_books.books;
+        // First, update the books vector
+        if let Some(idx) = market_books.books.iter().position(|b| b.asset_id == asset_id) {
+            market_books.books[idx] = new_book;
+        } else {
+            market_books.books.push(new_book);
+        }
 
-            if let Some(idx) = books.iter().position(|b| b.asset_id == asset_id) {
-                books[idx] = new_book;
+        // Then, if we have exactly 2 books, determine yes/no asset IDs
+        if market_books.books.len() == 2 {
+            let asset_id_0 = market_books.books[0].asset_id.clone();
+            let asset_id_1 = market_books.books[1].asset_id.clone();
+            let bids_0_len = market_books.books[0].bids.keys().len();
+            let asks_0_len = market_books.books[0].asks.keys().len();
+
+            if bids_0_len > asks_0_len {
+                market_books.asset_id_yes = Some(asset_id_0);
+                market_books.asset_id_no = Some(asset_id_1);
             } else {
-                books.push(new_book);
-
-                if books.len() == 2 {
-                    if books[0].bids.keys().len() > books[0].asks.keys().len() {
-                        market_books.asset_id_yes = Some(books[0].asset_id.clone());
-                        market_books.asset_id_no = Some(books[1].asset_id.clone());
-                    } else {
-                        market_books.asset_id_yes = Some(books[1].asset_id.clone());
-                        market_books.asset_id_no = Some(books[0].asset_id.clone());
-                    }
-                }
+                market_books.asset_id_yes = Some(asset_id_1);
+                market_books.asset_id_no = Some(asset_id_0);
             }
+        }
 
-            true
-        };
+        let updated = true;
 
         if updated {
             debug!(

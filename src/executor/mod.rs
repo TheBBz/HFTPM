@@ -1,15 +1,14 @@
-use crate::utils::{Config, ScopedTimer};
+use crate::utils::ScopedTimer;
 use crate::arb_engine::ArbitrageOpportunity;
 use polymarket_client_sdk::clob::{
     Client,
+    Config as ClobConfig,
     types::{
         OrderType,
         Side,
-        SignatureType,
-        SignedOrder as SdkSignedOrder,
     },
 };
-use polymarket_client_sdk::auth::state::Unauthenticated;
+use polymarket_client_sdk::auth::state::Authenticated;
 use rust_decimal::Decimal;
 use std::sync::Arc;
 use anyhow::{Result, Context};
@@ -18,9 +17,11 @@ use futures::future::join_all;
 use std::time::Instant;
 use alloy::signers::local::PrivateKeySigner;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SignedOrder {
-    pub order: SdkSignedOrder,
+    pub asset_id: String,
+    pub price: Decimal,
+    pub size: Decimal,
     pub order_hash: String,
     pub created_at: Instant,
 }
@@ -46,41 +47,40 @@ pub struct OrderResult {
 }
 
 pub struct OrderExecutor {
-    config: Arc<Config>,
-    clob_client: Arc<Client<Unauthenticated>>,
+    config: Arc<crate::utils::Config>,
+    clob_client: Client<Authenticated>,
     signer: PrivateKeySigner,
-    signature_type: SignatureType,
 }
 
 impl OrderExecutor {
-    pub async fn new(config: &Config) -> Result<Self> {
+    pub async fn new(config: &crate::utils::Config) -> Result<Self> {
         info!("🔐 Initializing order executor...");
 
-        let private_key = config.credentials.private_key.clone();
-
-        let clob_config = polymarket_client_sdk::clob::Config::default();
-
-        let signature_type = match config.credentials.signature_type {
-            0 => SignatureType::Eoa,
-            1 => SignatureType::Proxy,
-            2 => SignatureType::GnosisSafe,
-            _ => return Err(anyhow::anyhow!("Invalid signature type")),
-        };
-
-        let clob_client = Client::new(&config.server.rest_url, clob_config)?;
+        let private_key = &config.credentials.private_key;
 
         // Parse the private key for signing
         let signer: PrivateKeySigner = private_key.parse()
             .context("Failed to parse private key")?;
 
-        info!("✅ Order executor initialized");
-        info!("📝 Signature type: {:?}", signature_type);
+        let clob_config = ClobConfig::default();
+
+        // Create unauthenticated client first
+        let unauth_client = Client::new(&config.server.rest_url, clob_config)?;
+
+        // Authenticate the client
+        let clob_client = unauth_client
+            .authentication_builder(&signer)
+            .authenticate()
+            .await
+            .context("Failed to authenticate CLOB client")?;
+
+        info!("✅ Order executor initialized and authenticated");
+        info!("📝 Signature type: {}", config.credentials.signature_type);
 
         Ok(Self {
             config: Arc::new(config.clone()),
-            clob_client: Arc::new(clob_client),
+            clob_client,
             signer,
-            signature_type,
         })
     }
 
@@ -167,23 +167,28 @@ impl OrderExecutor {
             let price = edge.price;
             let size = edge.size;
 
-            let order_builder = self.clob_client.limit_order()
+            let order = self.clob_client
+                .limit_order()
                 .token_id(&edge.asset_id)
                 .size(size)
                 .price(price)
                 .side(Side::Buy)
-                .order_type(OrderType::FOK);
+                .order_type(OrderType::FOK)
+                .build()
+                .await
+                .context("Failed to build order")?;
 
-            let signable_order = order_builder.build().await
-                .context("Failed to create order")?;
-
-            let signed_order: SdkSignedOrder = self.clob_client.sign(&self.signer, signable_order).await
+            let sdk_signed_order = self.clob_client
+                .sign(&self.signer, order)
+                .await
                 .context("Failed to sign order")?;
 
-            let order_hash = self.calculate_order_hash(&signed_order);
+            let order_hash = self.calculate_order_hash(&sdk_signed_order);
 
             signed_orders.push(SignedOrder {
-                order: signed_order,
+                asset_id: edge.asset_id.clone(),
+                price,
+                size,
                 order_hash,
                 created_at: Instant::now(),
             });
@@ -204,23 +209,41 @@ impl OrderExecutor {
     }
 
     async fn submit_single_order(&self, signed_order: &SignedOrder) -> OrderResult {
-        let order_id = signed_order.order.order.tokenId.to_string();
-        let asset_id = signed_order.order.order.tokenId.to_string();
+        // Re-create and sign the order for submission
+        let order_result = async {
+            let order = self.clob_client
+                .limit_order()
+                .token_id(&signed_order.asset_id)
+                .size(signed_order.size)
+                .price(signed_order.price)
+                .side(Side::Buy)
+                .order_type(OrderType::FOK)
+                .build()
+                .await?;
 
-        match self.clob_client.post_order(&signed_order.order).await {
+            let sdk_signed = self.clob_client
+                .sign(&self.signer, order)
+                .await?;
+
+            self.clob_client
+                .post_order(sdk_signed)
+                .await
+        }.await;
+
+        match order_result {
             Ok(response) => {
-                info!("✅ Order submitted: {} - {:?}", order_id, response);
+                info!("✅ Order submitted: {} - {:?}", signed_order.asset_id, response);
                 OrderResult {
-                    asset_id,
+                    asset_id: signed_order.asset_id.clone(),
                     success: true,
-                    order_id: Some(order_id),
+                    order_id: Some(signed_order.order_hash.clone()),
                     error: None,
                 }
             }
             Err(e) => {
-                error!("❌ Order failed: {} - {}", order_id, e);
+                error!("❌ Order failed: {} - {}", signed_order.asset_id, e);
                 OrderResult {
-                    asset_id,
+                    asset_id: signed_order.asset_id.clone(),
                     success: false,
                     order_id: None,
                     error: Some(e.to_string()),
@@ -232,7 +255,9 @@ impl OrderExecutor {
     pub async fn cancel_open_orders(&self, _market_id: &str) -> Result<usize> {
         info!("🗑️  Cancelling orders");
 
-        let response = self.clob_client.cancel_all_orders().await
+        let response = self.clob_client
+            .cancel_all()
+            .await
             .context("Failed to cancel orders")?;
 
         let cancel_count = response.canceled.len();
@@ -242,13 +267,12 @@ impl OrderExecutor {
     }
 
     pub async fn get_balance(&self) -> Result<Decimal> {
-        use polymarket_client_sdk::clob::types::BalanceAllowanceRequest;
-
-        let request = BalanceAllowanceRequest::default();
-        let response = self.clob_client.balance_allowance(&request).await
+        let response = self.clob_client
+            .balance_allowance()
+            .await
             .context("Failed to get balance")?;
 
-        Ok(Decimal::from(response.balance))
+        Ok(response.balance)
     }
 
     pub async fn health_check(&self) -> Result<bool> {
@@ -262,19 +286,16 @@ impl OrderExecutor {
     }
 
     #[inline]
-    fn calculate_order_hash(&self, signed_order: &SdkSignedOrder) -> String {
+    fn calculate_order_hash<T>(&self, _signed_order: &T) -> String {
         use sha2::{Sha256, Digest};
 
         let mut hasher = Sha256::new();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
 
-        let order = &signed_order.order;
-
-        hasher.update(order.tokenId.as_le_bytes().as_ref());
-        hasher.update(order.makerAmount.as_le_bytes().as_ref());
-        hasher.update(order.takerAmount.as_le_bytes().as_ref());
-        hasher.update(order.expiration.as_le_bytes().as_ref());
-        hasher.update(order.nonce.as_le_bytes().as_ref());
-
+        hasher.update(now.to_le_bytes());
         let result = hasher.finalize();
         hex::encode(result)
     }
