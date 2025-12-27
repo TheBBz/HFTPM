@@ -209,12 +209,13 @@ impl OrderBookManager {
 
     #[inline]
     pub fn update_book(&self, market_id: &str, asset_id: &str, snapshot: &BookSnapshot) -> Result<()> {
-        // Allow books up to 5 minutes old for initial snapshots (300000ms)
-        // WebSocket sends historical snapshots first, then live updates
-        if snapshot.is_stale(300_000) {
-            warn!("Stale book for {} (timestamp: {})", market_id, snapshot.timestamp);
-            return Ok(());
-        }
+        // Skip stale check for now - initial WebSocket snapshots can be several minutes old
+        // and rejecting them means we have no market data at all
+        // TODO: Re-enable with smarter logic that accepts first snapshot per market regardless of age
+        // if snapshot.is_stale(300_000) {
+        //     warn!("Stale book for {} (timestamp: {})", market_id, snapshot.timestamp);
+        //     return Ok(());
+        // }
 
         let mut market_books = self.market_books
             .entry(market_id.to_string())
