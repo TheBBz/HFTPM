@@ -2,16 +2,21 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WsMessage {
-    #[serde(rename = "event_type")]
+    #[serde(rename = "event_type", default)]
     pub event_type: String,
-    #[serde(rename = "asset_id")]
+    #[serde(rename = "asset_id", default)]
     pub asset_id: String,
     #[serde(rename = "market")]
     pub market: String,
+    #[serde(default)]
     pub timestamp: Option<String>,
+    #[serde(default)]
     pub hash: Option<String>,
+    #[serde(default)]
     pub bids: Option<Vec<OrderSummary>>,
+    #[serde(default)]
     pub asks: Option<Vec<OrderSummary>>,
+    #[serde(default)]
     pub price_changes: Option<Vec<PriceChange>>,
 }
 
@@ -29,9 +34,9 @@ pub struct PriceChange {
     pub size: String,
     pub side: String,
     pub hash: String,
-    #[serde(rename = "best_bid")]
+    #[serde(rename = "best_bid", default)]
     pub best_bid: String,
-    #[serde(rename = "best_ask")]
+    #[serde(rename = "best_ask", default)]
     pub best_ask: String,
 }
 
@@ -47,11 +52,11 @@ pub struct BookSnapshot {
 
 impl WsMessage {
     pub fn is_book_snapshot(&self) -> bool {
-        self.event_type == "book"
+        self.event_type == "book" || (self.bids.is_some() || self.asks.is_some())
     }
 
     pub fn is_price_change(&self) -> bool {
-        self.event_type == "price_change"
+        self.event_type == "price_change" || self.price_changes.is_some()
     }
 
     pub fn parse_timestamp(&self) -> i64 {
