@@ -101,8 +101,11 @@ pub async fn run() -> Result<()> {
     parallel_scanner.build_correlation_graph().await;
     info!("✅ Correlation graph built: {} market pairs", parallel_scanner.num_correlations().await);
 
+    info!("🔌 Creating WebSocket client...");
     let mut ws_client = WebSocketClient::new(&config, &markets).await?;
+    info!("📡 Subscribing to {} markets...", markets.len());
     ws_client.subscribe_all_markets().await?;
+    info!("✅ Subscribed to all markets, starting main loop...");
 
     // Get strategy for the loops
     let strategy = config.trading.strategy.clone();

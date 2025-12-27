@@ -7,7 +7,8 @@
       "Bash(git push:*)",
       "Bash(rustup default:*)",
       "Bash(rustc --version:*)",
-      "Bash(cargo:*)"
+      "Bash(cargo:*)",
+      "Bash(git rm:*)"
     ]
   }
 }

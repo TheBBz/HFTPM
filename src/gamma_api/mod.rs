@@ -126,10 +126,11 @@ impl GammaClient {
             .await
             .context("Failed to parse Gamma API response")?;
 
+        // Note: We don't limit here - let the caller decide how many to use
+        // The config has max_order_books in trading section for that
         let filtered_markets: Vec<Market> = markets
             .into_iter()
             .filter(|market| self.should_include_market(market, markets_config))
-            .take(markets_config.min_order_book_depth.max(100))
             .collect();
 
         info!("✅ Fetched {} active markets", filtered_markets.len());
