@@ -125,7 +125,14 @@ pub struct LatencyConfig {
 
 impl Config {
     pub fn load() -> Result<Self> {
+        use config::File;
+        
         let settings = ConfigLoader::builder()
+            // Load base config
+            .add_source(File::with_name("config/config").required(true))
+            // Load secrets (optional, can use env vars instead)
+            .add_source(File::with_name("config/secrets").required(false))
+            // Environment variables override files
             .add_source(
                 Environment::default().prefix("HFTPM").separator("__")
             )
