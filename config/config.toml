@@ -16,22 +16,22 @@ signature_type = 2  # 0=EOA, 1=Proxy/Magic, 2=Gnosis Safe
 trading_mode = "simulation"  # "live" or "simulation" - Start in simulation for safety
 strategy = "hybrid"  # "arbitrage", "marketmaking", "volumefarming", "hybrid" (RN1-style)
 bankroll = 1000  # $1K starting capital
-max_arb_size = 120  # $120 max per trade (~12% of bankroll, RN1-inspired)
-min_edge = 0.020  # 2.0% minimum edge (more aggressive than 2.5%)
-min_liquidity = 100  # $100 minimum liquidity
+max_arb_size = 150  # $150 max per trade (~15% of bankroll)
+min_edge = 0.012  # 1.2% minimum edge (AGGRESSIVE - research shows 2.2% is floor for $1K)
+min_liquidity = 50  # $50 minimum liquidity (lower to catch more opportunities)
 max_order_books = 5000  # Maximum number of markets to track
 tick_size = "0.01"
 order_type = "FOK"  # Fill-Or-Kill for instant execution
-slippage_tolerance = 0.015  # 1.5% slippage tolerance (NOW USED in execution)
-# Market Making parameters (RN1 strategy)
-mm_spread_bps = 200  # 2% spread (200 basis points)
-mm_order_size = 25  # $25 per limit order (conservative for $1K bankroll)
-mm_max_orders_per_market = 4  # 2 bids + 2 asks
-mm_order_refresh_secs = 30  # Refresh orders every 30 seconds
+slippage_tolerance = 0.010  # 1.0% slippage tolerance (tighter for better fills)
+# Market Making parameters (RN1 strategy) - OPTIMIZED FOR 16 CORES
+mm_spread_bps = 150  # 1.5% spread (tighter to compete)
+mm_order_size = 30  # $30 per limit order
+mm_max_orders_per_market = 6  # 3 bids + 3 asks (more depth)
+mm_order_refresh_secs = 15  # Refresh every 15 seconds (faster)
 # Volume Farming parameters (trash farming for airdrop)
-vf_max_price = 0.05  # Only buy contracts at $0.05 or less
-vf_min_volume_per_trade = 100  # Target $100 notional volume minimum
-vf_daily_budget = 10  # $10/day for volume farming (loses but generates volume)
+vf_max_price = 0.03  # Only buy at $0.03 or less (better volume multiplier)
+vf_min_volume_per_trade = 200  # $200 notional volume minimum
+vf_daily_budget = 15  # $15/day for volume farming
 
 [risk]
 max_exposure_per_market = 200  # $200 per market (20% of bankroll)

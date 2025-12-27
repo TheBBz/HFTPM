@@ -8,6 +8,7 @@ pub mod gamma_api;
 pub mod utils;
 pub mod market_maker;
 pub mod volume_farmer;
+pub mod parallel_scanner;
 
 pub use websocket::WebSocketClient;
 pub use orderbook::{OrderBook, OrderBookManager};
@@ -19,6 +20,7 @@ pub use gamma_api::GammaClient;
 pub use utils::{Config, LatencyTracker, setup_tracing, Strategy};
 pub use market_maker::MarketMaker;
 pub use volume_farmer::VolumeFarmer;
+pub use parallel_scanner::ParallelScanner;
 
 use anyhow::Result;
 use tracing::info;
@@ -86,6 +88,14 @@ pub async fn run() -> Result<()> {
 
     let markets = gamma_client.fetch_markets(&config.markets).await?;
     info!("📈 Loaded {} markets from Gamma API", markets.len());
+
+    // Initialize parallel scanner for 16-core optimization
+    let parallel_scanner = ParallelScanner::new(&config, markets.clone());
+
+    // Build correlation graph (uses 64GB RAM for caching relationships)
+    info!("🔗 Building cross-market correlation graph (utilizing 64GB RAM)...");
+    parallel_scanner.build_correlation_graph().await;
+    info!("✅ Correlation graph built: {} market pairs", parallel_scanner.num_correlations().await);
 
     let mut ws_client = WebSocketClient::new(&config, &markets).await?;
     ws_client.subscribe_all_markets().await?;
