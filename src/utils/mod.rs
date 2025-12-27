@@ -5,6 +5,13 @@ use std::path::Path;
 use tracing::info;
 use anyhow::{Result, Context};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TradingMode {
+    Live,
+    Simulation,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
@@ -42,6 +49,7 @@ pub struct CredentialsConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingConfig {
+    pub trading_mode: TradingMode,
     pub bankroll: u64,
     pub max_arb_size: u64,
     pub min_edge: rust_decimal::Decimal,

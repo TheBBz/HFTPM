@@ -59,6 +59,32 @@ impl std::fmt::Display for ArbitrageOpportunity {
     }
 }
 
+impl ArbitrageOpportunity {
+    /// Calculate quality score based on RN1 strategy metrics
+    /// Returns score 0-10 (higher = better opportunity)
+    pub fn calculate_quality_score(&self) -> Decimal {
+        use rust_decimal_macros::dec;
+
+        // 1. Edge quality (weight: 40%)
+        let edge_score = (self.total_edge * dec!(100)).min(dec!(10));
+
+        // 2. Liquidity depth (weight: 30%)
+        let liquidity_score = (self.min_liquidity / dec!(1000)).min(dec!(10));
+
+        // 3. Position size (weight: 20%)
+        let size_score = (self.position_size / dec!(500)).min(dec!(10));
+
+        // 4. Expected profit (weight: 10%)
+        let profit_score = (self.net_profit / dec!(50)).min(dec!(10));
+
+        // Weighted score
+        (edge_score * dec!(0.4)) +
+        (liquidity_score * dec!(0.3)) +
+        (size_score * dec!(0.2)) +
+        (profit_score * dec!(0.1))
+    }
+}
+
 pub struct ArbEngine {
     config: Arc<Config>,
     detections: u64,
@@ -126,6 +152,25 @@ impl ArbEngine {
         }
 
         Ok(arb_op)
+    }
+
+    /// RN1 strategy: Only execute high-quality opportunities
+    pub fn should_execute_opportunity(&self, arb_op: &ArbitrageOpportunity) -> bool {
+        use rust_decimal_macros::dec;
+
+        let quality_score = arb_op.calculate_quality_score();
+        let min_quality = dec!(5.0);  // Top 50% threshold
+
+        if quality_score < min_quality {
+            debug!(
+                "⏭️  Skipping low-quality opportunity: {} (score: {:.2}/10, min: {:.2})",
+                arb_op.market_id, quality_score, min_quality
+            );
+            return false;
+        }
+
+        info!("✅ High-quality opportunity: {} (score: {:.2}/10)", arb_op.market_id, quality_score);
+        true
     }
 
     #[inline]

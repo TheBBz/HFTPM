@@ -36,6 +36,17 @@ pub async fn run() -> Result<()> {
     utils::setup_tracing(&config.monitoring.log_level, &config.monitoring.log_file);
 
     info!("🚀 HFTPM Ultra-Low-Latency Arbitrage Bot Starting");
+
+    // Log trading mode prominently
+    match config.trading.trading_mode {
+        utils::TradingMode::Live => {
+            tracing::warn!("⚡ LIVE TRADING MODE - REAL MONEY AT RISK");
+        }
+        utils::TradingMode::Simulation => {
+            info!("🎮 SIMULATION MODE - No real trades will be executed");
+        }
+    }
+
     info!("📊 Bankroll: ${} USDC", config.trading.bankroll);
     info!("🎯 Min Edge: {:.2}%", config.trading.min_edge * rust_decimal::Decimal::ONE_HUNDRED);
 

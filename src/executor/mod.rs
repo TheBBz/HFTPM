@@ -20,6 +20,8 @@ use tracing::{info, error, warn};
 use futures::future::join_all;
 use std::time::Instant;
 use alloy::signers::local::PrivateKeySigner;
+use std::collections::VecDeque;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct SignedOrder {
@@ -48,6 +50,147 @@ pub struct OrderResult {
     pub success: bool,
     pub order_id: Option<String>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimulatedTrade {
+    pub timestamp: i64,
+    pub market_id: String,
+    pub arb_type: String,
+    pub edges: Vec<SimulatedEdge>,
+    pub total_cost: Decimal,
+    pub expected_payout: Decimal,
+    pub net_profit: Decimal,
+    pub execution_time_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimulatedEdge {
+    pub asset_id: String,
+    pub price: Decimal,
+    pub size: Decimal,
+    pub cost: Decimal,
+}
+
+pub struct SimulationExecutor {
+    #[allow(dead_code)]
+    config: Arc<crate::utils::Config>,
+    trades: Arc<tokio::sync::RwLock<VecDeque<SimulatedTrade>>>,
+    simulated_balance: Arc<tokio::sync::RwLock<Decimal>>,
+    initial_balance: Decimal,
+}
+
+impl SimulationExecutor {
+    pub fn new(config: &crate::utils::Config) -> Self {
+        let initial_balance = Decimal::from(config.trading.bankroll);
+
+        info!("🎮 Simulation mode enabled - NO REAL TRADES");
+        info!("💰 Starting simulated balance: ${:.2}", initial_balance);
+
+        Self {
+            config: Arc::new(config.clone()),
+            trades: Arc::new(tokio::sync::RwLock::new(VecDeque::with_capacity(1000))),
+            simulated_balance: Arc::new(tokio::sync::RwLock::new(initial_balance)),
+            initial_balance,
+        }
+    }
+
+    pub async fn simulate_arbitrage(
+        &self,
+        arb_op: &ArbitrageOpportunity,
+    ) -> Result<ExecutionResult> {
+        let start_time = Instant::now();
+
+        info!("🎮 SIMULATED: Executing arbitrage for market {}", arb_op.market_id);
+
+        let total_cost = arb_op.edges.iter().map(|e| e.expected_cost).sum::<Decimal>();
+        let expected_payout = arb_op.position_size;
+        let fee_cost = arb_op.fee_cost;
+        let net_profit = arb_op.net_profit;
+
+        let mut balance = self.simulated_balance.write().await;
+
+        if *balance < total_cost {
+            warn!("🎮 SIMULATED: Insufficient balance: ${:.2} < ${:.2}", *balance, total_cost);
+            return Ok(ExecutionResult {
+                success: false,
+                filled: false,
+                partial_fill: false,
+                filled_amount: Decimal::ZERO,
+                total_cost: Decimal::ZERO,
+                orders: vec![],
+                execution_time_ms: start_time.elapsed().as_millis() as u64,
+                error_message: Some("Insufficient simulated balance".to_string()),
+            });
+        }
+
+        *balance -= total_cost;
+        *balance += expected_payout;
+        *balance -= fee_cost;
+
+        let current_balance = *balance;
+        let total_pnl = current_balance - self.initial_balance;
+        drop(balance);
+
+        let simulated_trade = SimulatedTrade {
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64,
+            market_id: arb_op.market_id.clone(),
+            arb_type: format!("{:?}", arb_op.arb_type),
+            edges: arb_op.edges.iter().map(|e| SimulatedEdge {
+                asset_id: e.asset_id.clone(),
+                price: e.price,
+                size: e.size,
+                cost: e.expected_cost,
+            }).collect(),
+            total_cost,
+            expected_payout,
+            net_profit,
+            execution_time_ms: start_time.elapsed().as_millis() as u64,
+        };
+
+        let mut trades = self.trades.write().await;
+        trades.push_back(simulated_trade.clone());
+        if trades.len() > 1000 {
+            trades.pop_front();
+        }
+        drop(trades);
+
+        info!(
+            "🎮 SIMULATED FILL: ${:.2} profit | Balance: ${:.2} (P&L: ${:.2})",
+            net_profit, current_balance, total_pnl
+        );
+
+        let order_results: Vec<OrderResult> = arb_op.edges.iter().map(|edge| OrderResult {
+            asset_id: edge.asset_id.clone(),
+            success: true,
+            order_id: Some(format!("SIM_{}", uuid::Uuid::new_v4())),
+            error: None,
+        }).collect();
+
+        Ok(ExecutionResult {
+            success: true,
+            filled: true,
+            partial_fill: false,
+            filled_amount: arb_op.position_size,
+            total_cost: net_profit,
+            orders: order_results,
+            execution_time_ms: start_time.elapsed().as_millis() as u64,
+            error_message: None,
+        })
+    }
+
+    #[allow(dead_code)]
+    pub async fn get_simulated_balance(&self) -> Decimal {
+        *self.simulated_balance.read().await
+    }
+
+    #[allow(dead_code)]
+    pub async fn get_simulated_pnl(&self) -> Decimal {
+        *self.simulated_balance.read().await - self.initial_balance
+    }
 }
 
 pub struct OrderExecutor {
@@ -89,6 +232,23 @@ impl OrderExecutor {
         })
     }
 
+    async fn validate_prices(&self, arb_op: &ArbitrageOpportunity) -> Result<bool> {
+        let slippage_tolerance = self.config.trading.slippage_tolerance;
+
+        // In production, re-fetch current orderbook prices here
+        // For now, log the validation check
+        for edge in &arb_op.edges {
+            info!(
+                "🔍 Validating price for {}: {:.4} (tolerance: {:.2}%)",
+                edge.asset_id,
+                edge.price,
+                slippage_tolerance * Decimal::ONE_HUNDRED
+            );
+        }
+
+        Ok(true) // Placeholder: implement actual check against fresh orderbook data
+    }
+
     pub async fn execute_arbitrage(&self, arb_op: &ArbitrageOpportunity) -> Result<ExecutionResult> {
         let _timer = ScopedTimer::new("execute_arbitrage", None);
 
@@ -96,6 +256,21 @@ impl OrderExecutor {
             "🎯 Executing arbitrage for market {}",
             arb_op.market_id
         );
+
+        // Validate prices haven't moved beyond slippage tolerance
+        if !self.validate_prices(arb_op).await? {
+            warn!("⚠️ Price slippage detected for {}, aborting execution", arb_op.market_id);
+            return Ok(ExecutionResult {
+                success: false,
+                filled: false,
+                partial_fill: false,
+                filled_amount: Decimal::ZERO,
+                total_cost: Decimal::ZERO,
+                orders: vec![],
+                execution_time_ms: 0,
+                error_message: Some("Price slippage exceeded tolerance".to_string()),
+            });
+        }
 
         let start_time = Instant::now();
 

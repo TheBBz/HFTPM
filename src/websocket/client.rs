@@ -25,15 +25,23 @@ pub struct WebSocketClient {
     markets: Arc<Vec<Market>>,
     latency_tracker: LatencyTracker,
     subscribed_markets: HashSet<String>,
+    simulation_executor: Option<Arc<crate::executor::SimulationExecutor>>,
 }
 
 impl WebSocketClient {
     pub async fn new(config: &Config, markets: &[Market]) -> Result<Self> {
+        let simulation_executor = if config.trading.trading_mode == crate::utils::TradingMode::Simulation {
+            Some(Arc::new(crate::executor::SimulationExecutor::new(config)))
+        } else {
+            None
+        };
+
         Ok(Self {
             config: Arc::new(config.clone()),
             markets: Arc::new(markets.to_vec()),
             latency_tracker: LatencyTracker::new(),
             subscribed_markets: HashSet::new(),
+            simulation_executor,
         })
     }
 
@@ -277,12 +285,18 @@ impl WebSocketClient {
             risk_manager,
         )? {
             monitor.record_arbitrage_detected(&arb_op).await;
-            self.execute_arbitrage(
-                &arb_op,
-                risk_manager,
-                executor,
-                monitor,
-            ).await?;
+
+            // Check quality threshold before executing
+            if arb_engine.should_execute_opportunity(&arb_op) {
+                self.execute_arbitrage(
+                    &arb_op,
+                    risk_manager,
+                    executor,
+                    monitor,
+                ).await?;
+            } else {
+                debug!("⏭️  Skipping low-quality arbitrage");
+            }
         }
 
         Ok(())
@@ -327,12 +341,18 @@ impl WebSocketClient {
             risk_manager,
         )? {
             monitor.record_arbitrage_detected(&arb_op).await;
-            self.execute_arbitrage(
-                &arb_op,
-                risk_manager,
-                executor,
-                monitor,
-            ).await?;
+
+            // Check quality threshold before executing
+            if arb_engine.should_execute_opportunity(&arb_op) {
+                self.execute_arbitrage(
+                    &arb_op,
+                    risk_manager,
+                    executor,
+                    monitor,
+                ).await?;
+            } else {
+                debug!("⏭️  Skipping low-quality arbitrage");
+            }
         }
 
         Ok(())
@@ -355,13 +375,20 @@ impl WebSocketClient {
 
         let execution_start = Instant::now();
 
-        match executor.execute_arbitrage(arb_op).await {
-            Ok(result) => {
+        // Execute based on trading mode
+        let result = if self.config.trading.trading_mode == crate::utils::TradingMode::Simulation {
+            self.simulation_executor.as_ref().unwrap().simulate_arbitrage(arb_op).await
+        } else {
+            executor.execute_arbitrage(arb_op).await
+        };
+
+        match result {
+            Ok(exec_result) => {
                 let execution_time = execution_start.elapsed();
 
-                risk_manager.record_arbitrage_execution(arb_op, &result)?;
+                risk_manager.record_arbitrage_execution(arb_op, &exec_result)?;
 
-                monitor.record_arbitrage_executed(arb_op, &result, execution_time).await;
+                monitor.record_arbitrage_executed(arb_op, &exec_result, execution_time).await;
 
                 if execution_time.as_millis() as u64 > self.config.execution.max_latency_ms {
                     monitor.alert_latency_spike(
@@ -370,8 +397,15 @@ impl WebSocketClient {
                     ).await;
                 }
 
+                let mode_indicator = if self.config.trading.trading_mode == crate::utils::TradingMode::Simulation {
+                    "[SIM]"
+                } else {
+                    "[LIVE]"
+                };
+
                 info!(
-                    "✅ Arbitrage executed in {:.2}ms: {}",
+                    "✅ {} Arbitrage executed in {:.2}ms: {}",
+                    mode_indicator,
                     execution_time.as_secs_f64() * 1000.0,
                     arb_op
                 );
