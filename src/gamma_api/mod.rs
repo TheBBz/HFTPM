@@ -10,13 +10,20 @@ pub struct Market {
     pub id: String,
     pub question: String,
     pub slug: String,
+    #[serde(rename = "conditionId")]
     pub market: String,
     pub description: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_outcomes")]
     pub outcomes: Vec<Outcome>,
+    #[serde(rename = "clobTokenIds", default, deserialize_with = "deserialize_token_ids")]
     pub assets_ids: Vec<String>,
+    #[serde(rename = "category")]
     pub ticker_tag: Option<String>,
+    #[serde(rename = "endDate")]
     pub end_date: Option<String>,
+    #[serde(rename = "volume24hr", default)]
     pub volume_24h: Option<u64>,
+    #[serde(default)]
     pub traders_24h: Option<u64>,
 }
 
@@ -27,10 +34,46 @@ pub struct Outcome {
     pub token_id: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GammaResponse {
-    pub data: Vec<Market>,
-    pub next_cursor: Option<String>,
+// Deserialize outcomes from JSON string like "[\"Yes\", \"No\"]"
+fn deserialize_outcomes<'de, D>(deserializer: D) -> Result<Vec<Outcome>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    
+    let s: Option<String> = Option::deserialize(deserializer)?;
+    if let Some(s) = s {
+        let outcome_names: Vec<String> = serde_json::from_str(&s)
+            .map_err(|e| Error::custom(format!("Failed to parse outcomes: {}", e)))?;
+        
+        Ok(outcome_names
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| Outcome {
+                id: i.to_string(),
+                name,
+                token_id: String::new(),
+            })
+            .collect())
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+// Deserialize token IDs from JSON string like "[\"123...\", \"456...\"]"
+fn deserialize_token_ids<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    
+    let s: Option<String> = Option::deserialize(deserializer)?;
+    if let Some(s) = s {
+        serde_json::from_str(&s)
+            .map_err(|e| Error::custom(format!("Failed to parse token IDs: {}", e)))
+    } else {
+        Ok(Vec::new())
+    }
 }
 
 pub struct GammaClient {
@@ -59,70 +102,42 @@ impl GammaClient {
     ) -> Result<Vec<Market>> {
         info!("📊 Fetching markets from Gamma API...");
 
-        let mut all_markets = Vec::new();
-        let mut cursor: Option<String> = None;
-        let mut page = 0;
+        // Fetch active markets with CLOB trading enabled
+        let url = format!("{}/markets?active=true&closed=false&limit=1000", self.base_url);
 
-        loop {
-            let url = if let Some(c) = &cursor {
-                format!("{}/markets?cursor={}&limit=100", self.base_url, c)
-            } else {
-                format!("{}/markets?limit=100", self.base_url)
-            };
+        debug!("Fetching markets from {}", url);
 
-            debug!("Fetching markets page {} from {}", page, url);
+        let response = self.client
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to fetch markets from Gamma API")?;
 
-            let response = self.client
-                .get(&url)
-                .send()
-                .await
-                .context("Failed to fetch markets from Gamma API")?;
-
-            if !response.status().is_success() {
-                anyhow::bail!("Gamma API returned status: {}", response.status());
-            }
-
-            let gamma_response: GammaResponse = response
-                .json()
-                .await
-                .context("Failed to parse Gamma API response")?;
-
-            let filtered_markets: Vec<Market> = gamma_response.data
-                .into_iter()
-                .filter(|market| self.should_include_market(market, markets_config))
-                .collect();
-
-            let count = filtered_markets.len();
-            let is_empty = filtered_markets.is_empty();
-            all_markets.extend(filtered_markets);
-
-            debug!("Fetched {} markets on page {} (total: {})", count, page, all_markets.len());
-
-            cursor = gamma_response.next_cursor.clone();
-
-            if cursor.is_none() || is_empty {
-                break;
-            }
-
-            page += 1;
-
-            if all_markets.len() >= 5000 {
-                info!("Reached maximum market limit (5000)");
-                break;
-            }
-
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        if !response.status().is_success() {
+            anyhow::bail!("Gamma API returned status: {}", response.status());
         }
 
-        info!("✅ Fetched {} markets from Gamma API", all_markets.len());
+        let markets: Vec<Market> = response
+            .json()
+            .await
+            .context("Failed to parse Gamma API response")?;
 
+        let filtered_markets: Vec<Market> = markets
+            .into_iter()
+            .filter(|market| self.should_include_market(market, markets_config))
+            .take(markets_config.min_order_book_depth.max(100))
+            .collect();
+
+        info!("✅ Fetched {} active markets", filtered_markets.len());
+
+        // Cache markets for quick lookup
         let mut cache = self.markets_cache.write().await;
-        for market in &all_markets {
+        for market in &filtered_markets {
             cache.insert(market.market.clone(), market.clone());
         }
         drop(cache);
 
-        Ok(all_markets)
+        Ok(filtered_markets)
     }
 
     #[inline]
