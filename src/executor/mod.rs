@@ -293,8 +293,11 @@ impl OrderExecutor {
     }
 
     pub async fn get_balance(&self) -> Result<Decimal> {
+        use polymarket_client_sdk::clob::types::BalanceAllowanceRequest;
+
+        let request = BalanceAllowanceRequest::default();
         let response: BalanceAllowanceResponse = self.clob_client
-            .balance_allowance()
+            .balance_allowance(&request)
             .await
             .context("Failed to get balance")?;
 
