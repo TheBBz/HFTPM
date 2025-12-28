@@ -6,7 +6,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventInfo {
@@ -544,41 +544,9 @@ impl GammaClient {
 
     // =========================================================================
     // Short-Window Market Discovery (15m/30m Up/Down markets from /events API)
+    // Verified API pattern: events?slug={ticker}-updown-15m-{timestamp}
+    // where timestamp = epoch rounded to 900 seconds (15 min intervals)
     // =========================================================================
-    
-    /// Known series slugs for short-window markets (15m/30m/1h up/down)
-    /// Discovered via Gamma API research - these markets only exist in /events endpoint
-    const SHORT_WINDOW_SERIES: &'static [&'static str] = &[
-        // 15-minute series (highest frequency, best for short-window arb)
-        "btc-up-or-down-15m",
-        "eth-up-or-down-15m",
-        "sol-up-or-down-15m",
-        "link-up-or-down-15m",
-        "doge-up-or-down-15m",
-        "xrp-up-or-down-15m",
-        "sui-up-or-down-15m",
-        "pepe-up-or-down-15m",
-        "avax-up-or-down-15m",
-        "ada-up-or-down-15m",
-        "bnb-up-or-down-15m",
-        "pol-up-or-down-15m",
-        "near-up-or-down-15m",
-        "apt-up-or-down-15m",
-        "hype-up-or-down-15m",
-        // 30-minute series
-        "btc-up-or-down-30m",
-        "eth-up-or-down-30m",
-        "sol-up-or-down-30m",
-        // 1-hour series
-        "btc-up-or-down-1h",
-        "eth-up-or-down-1h",
-        "sol-up-or-down-1h",
-        "link-up-or-down-1h",
-        "doge-up-or-down-1h",
-        "xrp-up-or-down-1h",
-        "sui-up-or-down-1h",
-        "pepe-up-or-down-1h",
-    ];
 
     /// Fetch short-window markets from the events API
     /// The API's series_slug filter is broken, so we generate event slugs dynamically
@@ -651,13 +619,14 @@ impl GammaClient {
         Ok(short_window_markets)
     }
     
-    /// Fetch a single event by its slug and extract the market
+    /// Fetch a single event by its slug using query parameter
+    /// Verified: events?slug={slug} works, events/{slug} does NOT
     async fn fetch_event_by_slug(
         &self,
         event_slug: &str,
         markets_config: &crate::utils::MarketsConfig,
     ) -> Option<Market> {
-        let url = format!("{}/events/{}", self.base_url, event_slug);
+        let url = format!("{}/events?slug={}&limit=1", self.base_url, event_slug);
         
         match self.client.get(&url).send().await {
             Ok(response) => {
@@ -665,8 +634,9 @@ impl GammaClient {
                     return None; // Event doesn't exist for this timestamp
                 }
                 
-                match response.json::<EventResponse>().await {
-                    Ok(event) => {
+                match response.json::<Vec<EventResponse>>().await {
+                    Ok(events) => {
+                        let event = events.into_iter().next()?;
                         // Get the first active market from the event
                         for event_market in &event.markets {
                             if !event_market.active || event_market.closed || !event_market.enable_order_book {
