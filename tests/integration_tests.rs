@@ -1,13 +1,13 @@
 #[cfg(test)]
 mod tests {
     use hfptm::{
-        Config, OrderBookManager, ArbEngine, RiskManager, LatencyTracker,
-        websocket::BookSnapshot,
         arb_engine::ArbType,
         utils::{
-            ServerConfig, CredentialsConfig, TradingConfig, RiskConfig,
-            MarketsConfig, ExecutionConfig, MonitoringConfig, AlertsConfig, LatencyConfig,
+            AlertsConfig, CredentialsConfig, ExecutionConfig, LatencyConfig, MarketsConfig,
+            MonitoringConfig, RiskConfig, ServerConfig, TradingConfig,
         },
+        websocket::BookSnapshot,
+        ArbEngine, Config, LatencyTracker, OrderBookManager, RiskManager,
     };
     use rust_decimal::Decimal;
     use rust_decimal_macros::dec;
@@ -90,8 +90,12 @@ mod tests {
             hash: "hash2".to_string(),
         };
 
-        orderbook_manager.update_book(market_id, asset_yes, &yes_snapshot).unwrap();
-        orderbook_manager.update_book(market_id, asset_no, &no_snapshot).unwrap();
+        orderbook_manager
+            .update_book(market_id, asset_yes, &yes_snapshot)
+            .unwrap();
+        orderbook_manager
+            .update_book(market_id, asset_no, &no_snapshot)
+            .unwrap();
 
         // detect_arbitrage is not async
         let arb_op = arb_engine.detect_arbitrage(&orderbook_manager, market_id, &risk_manager);
@@ -147,7 +151,8 @@ mod tests {
                 polygon_rpc_url: "https://test.polygon.com".to_string(),
             },
             credentials: CredentialsConfig {
-                private_key: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string(),
+                private_key: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+                    .to_string(),
                 api_key: "test_key".to_string(),
                 api_secret: "test_secret".to_string(),
                 api_passphrase: "test_pass".to_string(),

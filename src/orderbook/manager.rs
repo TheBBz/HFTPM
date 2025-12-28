@@ -1,12 +1,12 @@
-use crate::websocket::types::BookSnapshot;
 use crate::utils::Config;
-use anyhow::{Result, Context};
+use crate::websocket::types::BookSnapshot;
+use anyhow::{Context, Result};
 use dashmap::DashMap;
-use std::collections::BTreeMap;
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::Arc;
-use serde::{Serialize, Deserialize};
-use tracing::{debug, warn};
+use tracing::debug;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderBook {
@@ -19,12 +19,7 @@ pub struct OrderBook {
 }
 
 impl OrderBook {
-    pub fn new(
-        market_id: String,
-        asset_id: String,
-        timestamp: i64,
-        hash: String,
-    ) -> Self {
+    pub fn new(market_id: String, asset_id: String, timestamp: i64, hash: String) -> Self {
         Self {
             market_id,
             asset_id,
@@ -103,18 +98,12 @@ impl OrderBook {
 
     #[inline]
     pub fn bid_depth_at(&self, price: Decimal) -> Decimal {
-        self.bids
-            .range(price..)
-            .map(|(_, size)| *size)
-            .sum()
+        self.bids.range(price..).map(|(_, size)| *size).sum()
     }
 
     #[inline]
     pub fn ask_depth_at(&self, price: Decimal) -> Decimal {
-        self.asks
-            .range(..=price)
-            .map(|(_, size)| *size)
-            .sum()
+        self.asks.range(..=price).map(|(_, size)| *size).sum()
     }
 
     #[inline]
@@ -158,9 +147,7 @@ impl MarketBooks {
 
     #[inline]
     pub fn is_binary(&self) -> bool {
-        self.books.len() == 2 &&
-            self.asset_id_yes.is_some() &&
-            self.asset_id_no.is_some()
+        self.books.len() == 2 && self.asset_id_yes.is_some() && self.asset_id_no.is_some()
     }
 
     #[inline]
@@ -208,7 +195,12 @@ impl OrderBookManager {
     }
 
     #[inline]
-    pub fn update_book(&self, market_id: &str, asset_id: &str, snapshot: &BookSnapshot) -> Result<()> {
+    pub fn update_book(
+        &self,
+        market_id: &str,
+        asset_id: &str,
+        snapshot: &BookSnapshot,
+    ) -> Result<()> {
         // Skip stale check for now - initial WebSocket snapshots can be several minutes old
         // and rejecting them means we have no market data at all
         // TODO: Re-enable with smarter logic that accepts first snapshot per market regardless of age
@@ -217,7 +209,8 @@ impl OrderBookManager {
         //     return Ok(());
         // }
 
-        let mut market_books = self.market_books
+        let mut market_books = self
+            .market_books
             .entry(market_id.to_string())
             .or_insert_with(|| MarketBooks::new(market_id.to_string()));
 
@@ -231,7 +224,11 @@ impl OrderBookManager {
         new_book.update_from_snapshot(snapshot);
 
         // First, update the books vector
-        if let Some(idx) = market_books.books.iter().position(|b| b.asset_id == asset_id) {
+        if let Some(idx) = market_books
+            .books
+            .iter()
+            .position(|b| b.asset_id == asset_id)
+        {
             market_books.books[idx] = new_book;
         } else {
             market_books.books.push(new_book);
@@ -258,8 +255,7 @@ impl OrderBookManager {
         if updated {
             debug!(
                 "✅ Updated order book for market {} asset {}",
-                market_id,
-                asset_id
+                market_id, asset_id
             );
         }
 
@@ -275,7 +271,8 @@ impl OrderBookManager {
         size: Decimal,
         side: &str,
     ) -> Result<()> {
-        let mut market_books = self.market_books
+        let mut market_books = self
+            .market_books
             .get_mut(market_id)
             .context("Market not found")?;
 
@@ -298,24 +295,29 @@ impl OrderBookManager {
     #[inline]
     pub fn get_book(&self, market_id: &str, asset_id: &str) -> Option<OrderBook> {
         let market_books = self.market_books.get(market_id)?;
-        market_books.books.iter()
+        market_books
+            .books
+            .iter()
             .find(|book| book.asset_id == asset_id)
             .cloned()
     }
 
     #[inline]
-    pub fn get_best_asks_for_market(&self, market_id: &str) -> Option<Vec<(String, Decimal, Decimal)>> {
+    pub fn get_best_asks_for_market(
+        &self,
+        market_id: &str,
+    ) -> Option<Vec<(String, Decimal, Decimal)>> {
         let market_books = self.get_market_books(market_id)?;
 
         Some(
-            market_books.books
+            market_books
+                .books
                 .iter()
                 .filter_map(|book| {
-                    book.best_ask().map(|(price, size)| {
-                        (book.asset_id.clone(), price, size)
-                    })
+                    book.best_ask()
+                        .map(|(price, size)| (book.asset_id.clone(), price, size))
                 })
-                .collect()
+                .collect(),
         )
     }
 
@@ -338,7 +340,10 @@ impl OrderBookManager {
 
     #[inline]
     pub fn get_all_market_ids(&self) -> Vec<String> {
-        self.market_books.iter().map(|entry| entry.key().clone()).collect()
+        self.market_books
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
     }
 
     #[inline]

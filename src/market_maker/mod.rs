@@ -6,17 +6,17 @@
 //! 3. Track open orders and manage inventory
 //! 4. Use synthetic hedging instead of selling (avoid taker fees)
 
-use crate::utils::Config;
-use crate::orderbook::OrderBookManager;
 use crate::gamma_api::Market;
+use crate::orderbook::OrderBookManager;
+use crate::utils::Config;
+use anyhow::Result;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use anyhow::Result;
-use tracing::{info, debug};
-use serde::{Serialize, Deserialize};
+use tracing::{debug, info};
 
 /// Represents an open limit order
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,8 +33,8 @@ pub struct OpenOrder {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum OrderSide {
-    Bid,  // Buy order
-    Ask,  // Sell order
+    Bid, // Buy order
+    Ask, // Sell order
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -72,7 +72,7 @@ pub struct MarketStats {
 /// The Market Maker engine
 pub struct MarketMaker {
     config: Arc<Config>,
-    open_orders: HashMap<String, OpenOrder>,  // order_id -> order
+    open_orders: HashMap<String, OpenOrder>, // order_id -> order
     market_stats: HashMap<String, MarketStats>,
     total_volume: Decimal,
     total_rewards_estimate: Decimal,
@@ -88,7 +88,10 @@ impl MarketMaker {
         info!("📊 Market Maker initialized");
         info!("   Spread: {} bps", config.trading.mm_spread_bps);
         info!("   Order size: ${}", config.trading.mm_order_size);
-        info!("   Max orders/market: {}", config.trading.mm_max_orders_per_market);
+        info!(
+            "   Max orders/market: {}",
+            config.trading.mm_max_orders_per_market
+        );
 
         Self {
             config: Arc::new(config.clone()),
@@ -115,7 +118,9 @@ impl MarketMaker {
         for market in markets {
             // Get best bid and ask for each asset in the market
             for asset_id in &market.assets_ids {
-                if let Some((best_bid, best_ask)) = self.get_best_prices(orderbook_manager, &market.market, asset_id) {
+                if let Some((best_bid, best_ask)) =
+                    self.get_best_prices(orderbook_manager, &market.market, asset_id)
+                {
                     // Calculate midpoint
                     let midpoint = (best_bid + best_ask) / dec!(2);
 
@@ -130,7 +135,10 @@ impl MarketMaker {
 
                     // Skip if spread is too tight (we can't compete)
                     if current_spread_bps < Decimal::from(self.config.trading.mm_spread_bps / 2) {
-                        debug!("Spread too tight for {}: {} bps", asset_id, current_spread_bps);
+                        debug!(
+                            "Spread too tight for {}: {} bps",
+                            asset_id, current_spread_bps
+                        );
                         continue;
                     }
 
@@ -167,12 +175,16 @@ impl MarketMaker {
     ) -> Option<(Decimal, Decimal)> {
         let book = orderbook_manager.get_book(market_id, asset_id)?;
 
-        let best_bid = book.bids.iter()
-            .max_by(|a, b| a.0.cmp(&b.0))
+        let best_bid = book
+            .bids
+            .iter()
+            .max_by(|a, b| a.0.cmp(b.0))
             .map(|(price, _)| *price)?;
 
-        let best_ask = book.asks.iter()
-            .min_by(|a, b| a.0.cmp(&b.0))
+        let best_ask = book
+            .asks
+            .iter()
+            .min_by(|a, b| a.0.cmp(b.0))
             .map(|(price, _)| *price)?;
 
         Some((best_bid, best_ask))
@@ -188,7 +200,9 @@ impl MarketMaker {
 
         for opp in opportunities.iter().take(max_markets) {
             // Check if we already have orders in this market
-            let existing_orders = self.open_orders.values()
+            let existing_orders = self
+                .open_orders
+                .values()
                 .filter(|o| o.asset_id == opp.asset_id)
                 .count();
 
@@ -197,22 +211,26 @@ impl MarketMaker {
             }
 
             // Simulate placing bid order
-            let bid_order = self.simulate_order(
-                &opp.market_id,
-                &opp.asset_id,
-                OrderSide::Bid,
-                opp.bid_price,
-                opp.size,
-            ).await?;
+            let bid_order = self
+                .simulate_order(
+                    &opp.market_id,
+                    &opp.asset_id,
+                    OrderSide::Bid,
+                    opp.bid_price,
+                    opp.size,
+                )
+                .await?;
 
             // Simulate placing ask order (we're selling to close, so this is like a synthetic hedge)
-            let ask_order = self.simulate_order(
-                &opp.market_id,
-                &opp.asset_id,
-                OrderSide::Ask,
-                opp.ask_price,
-                opp.size,
-            ).await?;
+            let ask_order = self
+                .simulate_order(
+                    &opp.market_id,
+                    &opp.asset_id,
+                    OrderSide::Ask,
+                    opp.ask_price,
+                    opp.size,
+                )
+                .await?;
 
             results.push(SimulatedMMResult {
                 market_id: opp.market_id.clone(),
@@ -289,11 +307,9 @@ impl MarketMaker {
             }
 
             // Get current best prices
-            if let Some((best_bid, best_ask)) = self.get_best_prices(
-                orderbook_manager,
-                &order.market_id,
-                &order.asset_id,
-            ) {
+            if let Some((best_bid, best_ask)) =
+                self.get_best_prices(orderbook_manager, &order.market_id, &order.asset_id)
+            {
                 let should_fill = match order.side {
                     // Bid fills when market ask drops to our bid
                     OrderSide::Bid => best_ask <= order.price,
@@ -360,10 +376,12 @@ impl MarketMaker {
         let now = Instant::now();
 
         // Cancel stale open orders
-        let stale_orders: Vec<_> = self.open_orders.iter()
+        let stale_orders: Vec<_> = self
+            .open_orders
+            .iter()
             .filter(|(_, order)| {
-                order.status == OrderStatus::Open &&
-                now.duration_since(Instant::now()) > stale_threshold
+                order.status == OrderStatus::Open
+                    && now.duration_since(Instant::now()) > stale_threshold
             })
             .map(|(id, _)| id.clone())
             .collect();
@@ -384,8 +402,16 @@ impl MarketMaker {
 
         MMStats {
             total_orders_placed: self.open_orders.len() as u64,
-            open_orders: self.open_orders.values().filter(|o| o.status == OrderStatus::Open).count() as u64,
-            filled_orders: self.open_orders.values().filter(|o| o.status == OrderStatus::Filled).count() as u64,
+            open_orders: self
+                .open_orders
+                .values()
+                .filter(|o| o.status == OrderStatus::Open)
+                .count() as u64,
+            filled_orders: self
+                .open_orders
+                .values()
+                .filter(|o| o.status == OrderStatus::Filled)
+                .count() as u64,
             total_volume: self.total_volume,
             estimated_rewards: self.total_rewards_estimate,
             simulated_balance: self.simulated_balance,

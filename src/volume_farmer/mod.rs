@@ -8,16 +8,16 @@
 //! Example: Buying $10 of contracts at $0.01 = $1,000 notional volume
 //! The $10 loss is worth it if airdrop allocation > $10
 
-use crate::utils::Config;
-use crate::orderbook::OrderBookManager;
 use crate::gamma_api::Market;
+use crate::orderbook::OrderBookManager;
+use crate::utils::Config;
+use anyhow::Result;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
-use anyhow::Result;
-use tracing::{info, debug, warn};
-use serde::{Serialize, Deserialize};
+use tracing::{debug, info, warn};
 
 /// A trash farming opportunity
 #[derive(Debug, Clone)]
@@ -27,9 +27,9 @@ pub struct TrashOpportunity {
     pub outcome_name: String,
     pub price: Decimal,
     pub available_size: Decimal,
-    pub cost_for_volume: Decimal,      // How much we pay
-    pub notional_volume: Decimal,      // Volume credit we get
-    pub volume_multiplier: Decimal,    // notional_volume / cost
+    pub cost_for_volume: Decimal,   // How much we pay
+    pub notional_volume: Decimal,   // Volume credit we get
+    pub volume_multiplier: Decimal, // notional_volume / cost
 }
 
 /// Record of a trash trade
@@ -72,7 +72,10 @@ impl VolumeFarmer {
 
         info!("🗑️  Volume Farmer initialized");
         info!("   Max price: ${:.2}", config.trading.vf_max_price);
-        info!("   Min volume/trade: ${}", config.trading.vf_min_volume_per_trade);
+        info!(
+            "   Min volume/trade: ${}",
+            config.trading.vf_min_volume_per_trade
+        );
         info!("   Daily budget: ${}", config.trading.vf_daily_budget);
 
         Self {
@@ -114,7 +117,9 @@ impl VolumeFarmer {
 
                             // Only include if we have enough size available
                             if *size >= cost_for_min_volume / *price {
-                                let outcome_name = market.outcomes.get(i)
+                                let outcome_name = market
+                                    .outcomes
+                                    .get(i)
                                     .map(|o| o.name.clone())
                                     .unwrap_or_else(|| format!("Outcome_{}", i));
 
@@ -148,20 +153,25 @@ impl VolumeFarmer {
     ) -> Result<Option<TrashTrade>> {
         // Check daily budget
         if self.daily_spend >= Decimal::from(self.config.trading.vf_daily_budget) {
-            debug!("Daily budget exhausted: ${:.2} / ${}",
-                self.daily_spend, self.config.trading.vf_daily_budget);
+            debug!(
+                "Daily budget exhausted: ${:.2} / ${}",
+                self.daily_spend, self.config.trading.vf_daily_budget
+            );
             return Ok(None);
         }
 
         // Check if we have enough balance
         if self.simulated_balance < opportunity.cost_for_volume {
-            warn!("Insufficient balance for trash trade: ${:.2} < ${:.2}",
-                self.simulated_balance, opportunity.cost_for_volume);
+            warn!(
+                "Insufficient balance for trash trade: ${:.2} < ${:.2}",
+                self.simulated_balance, opportunity.cost_for_volume
+            );
             return Ok(None);
         }
 
         // Calculate how much we can actually spend
-        let remaining_budget = Decimal::from(self.config.trading.vf_daily_budget) - self.daily_spend;
+        let remaining_budget =
+            Decimal::from(self.config.trading.vf_daily_budget) - self.daily_spend;
         let actual_cost = opportunity.cost_for_volume.min(remaining_budget);
         let actual_volume = actual_cost * opportunity.volume_multiplier;
 
@@ -274,8 +284,8 @@ mod tests {
         // At $0.01, $1 buys 100 contracts = $100 notional volume
         let price = dec!(0.01);
         let cost = dec!(1.0);
-        let contracts = cost / price;  // 100
-        let notional = contracts * Decimal::ONE;  // $100
+        let contracts = cost / price; // 100
+        let notional = contracts * Decimal::ONE; // $100
 
         assert_eq!(contracts, dec!(100));
         assert_eq!(notional, dec!(100));

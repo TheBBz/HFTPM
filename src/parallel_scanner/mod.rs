@@ -5,18 +5,18 @@
 //! - Detection latency reduced by ~16x
 //! - Can process 100,000+ orderbook updates/sec
 
-use crate::orderbook::OrderBookManager;
 use crate::gamma_api::Market;
+use crate::orderbook::OrderBookManager;
 use crate::utils::Config;
-use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
-use std::sync::Arc;
-use std::collections::HashMap;
-use tokio::sync::RwLock;
-use tracing::{info, debug};
 #[allow(unused_imports)]
 use anyhow::Result;
-use serde::{Serialize, Deserialize};
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use tracing::{debug, info};
 
 /// Number of worker threads (should match vCores)
 const NUM_WORKERS: usize = 16;
@@ -38,10 +38,10 @@ pub struct CrossMarketOpportunity {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CrossArbType {
-    LogicalImplication,    // A implies B (e.g., "Trump wins" → "Republican wins")
-    MutualExclusion,       // A and B can't both happen
-    ConditionalPricing,    // B's price should change if A happens
-    TemporalDependency,    // A must happen before B
+    LogicalImplication, // A implies B (e.g., "Trump wins" → "Republican wins")
+    MutualExclusion,    // A and B can't both happen
+    ConditionalPricing, // B's price should change if A happens
+    TemporalDependency, // A must happen before B
 }
 
 /// Multi-outcome arbitrage opportunity (sum < $1.00)
@@ -72,15 +72,15 @@ pub struct MarketCorrelation {
     pub market_a: String,
     pub market_b: String,
     pub correlation_type: CorrelationType,
-    pub strength: f64,  // 0.0 to 1.0
+    pub strength: f64, // 0.0 to 1.0
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CorrelationType {
-    Parent,      // A is parent event of B
-    Sibling,     // A and B share parent
-    Opposite,    // A and B are mutually exclusive
-    Dependent,   // B's outcome depends on A
+    Parent,    // A is parent event of B
+    Sibling,   // A and B share parent
+    Opposite,  // A and B are mutually exclusive
+    Dependent, // B's outcome depends on A
 }
 
 /// Statistics for parallel scanning
@@ -106,7 +106,10 @@ pub struct ParallelScanner {
 
 impl ParallelScanner {
     pub fn new(config: &Config, markets: Vec<Market>) -> Self {
-        info!("🔬 Parallel Scanner initialized with {} workers", NUM_WORKERS);
+        info!(
+            "🔬 Parallel Scanner initialized with {} workers",
+            NUM_WORKERS
+        );
         info!("   Markets to scan: {}", markets.len());
         info!("   Markets per worker: ~{}", markets.len() / NUM_WORKERS);
 
@@ -133,22 +136,29 @@ impl ParallelScanner {
         for market in markets.iter() {
             // Use event_id for grouping - this is the key for cross-market correlation!
             if let Some(event_id) = market.event_id() {
-                event_groups.entry(event_id.to_string()).or_default().push(market);
+                event_groups
+                    .entry(event_id.to_string())
+                    .or_default()
+                    .push(market);
             }
         }
-        
+
         // Log how many multi-market events we found
-        let multi_market_events: Vec<_> = event_groups.iter()
+        let multi_market_events: Vec<_> = event_groups
+            .iter()
             .filter(|(_, group)| group.len() >= 2)
             .collect();
-        info!("📊 Found {} events with multiple markets", multi_market_events.len());
+        info!(
+            "📊 Found {} events with multiple markets",
+            multi_market_events.len()
+        );
 
         // Find related markets within each event
         for (event_id, group) in &event_groups {
             if group.len() < 2 {
                 continue;
             }
-            
+
             debug!("🔍 Event {} has {} related markets", event_id, group.len());
 
             for i in 0..group.len() {
@@ -165,7 +175,11 @@ impl ParallelScanner {
         }
 
         let elapsed = start.elapsed();
-        info!("✅ Built correlation graph: {} relationships in {:?}", correlations.len(), elapsed);
+        info!(
+            "✅ Built correlation graph: {} relationships in {:?}",
+            correlations.len(),
+            elapsed
+        );
 
         // Store correlations
         {
@@ -177,34 +191,50 @@ impl ParallelScanner {
         let corr_read = self.correlations.read().await;
         let mut cache = self.relationship_cache.write().await;
         for corr in corr_read.iter() {
-            cache.entry(corr.market_a.clone()).or_default().push(corr.market_b.clone());
-            cache.entry(corr.market_b.clone()).or_default().push(corr.market_a.clone());
+            cache
+                .entry(corr.market_a.clone())
+                .or_default()
+                .push(corr.market_b.clone());
+            cache
+                .entry(corr.market_b.clone())
+                .or_default()
+                .push(corr.market_a.clone());
         }
     }
 
     /// Detect correlation between two markets based on question text
-    fn detect_correlation(&self, market_a: &Market, market_b: &Market) -> Option<MarketCorrelation> {
+    fn detect_correlation(
+        &self,
+        market_a: &Market,
+        market_b: &Market,
+    ) -> Option<MarketCorrelation> {
         let q_a = market_a.question.to_lowercase();
         let q_b = market_b.question.to_lowercase();
 
         // Extract price targets for threshold-based markets (e.g., "Bitcoin reach $X")
         let price_a = self.extract_price_target(&q_a);
         let price_b = self.extract_price_target(&q_b);
-        
+
         // If both markets have price targets, determine parent-child relationship
         if let (Some(pa), Some(pb)) = (price_a, price_b) {
             let is_reach_a = q_a.contains("reach") || q_a.contains("hit") || q_a.contains("above");
             let is_reach_b = q_b.contains("reach") || q_b.contains("hit") || q_b.contains("above");
-            let is_dip_a = q_a.contains("dip") || q_a.contains("fall") || q_a.contains("below") || q_a.contains("drop");
-            let is_dip_b = q_b.contains("dip") || q_b.contains("fall") || q_b.contains("below") || q_b.contains("drop");
-            
+            let is_dip_a = q_a.contains("dip")
+                || q_a.contains("fall")
+                || q_a.contains("below")
+                || q_a.contains("drop");
+            let is_dip_b = q_b.contains("dip")
+                || q_b.contains("fall")
+                || q_b.contains("below")
+                || q_b.contains("drop");
+
             // For "reach $X" markets: higher price is child of lower price
             // If it reaches $150k, it MUST have reached $100k first
             if is_reach_a && is_reach_b && pa != pb {
                 let (parent, child) = if pa < pb {
-                    (market_a, market_b)  // Lower price is parent
+                    (market_a, market_b) // Lower price is parent
                 } else {
-                    (market_b, market_a)  // Lower price is parent
+                    (market_b, market_a) // Lower price is parent
                 };
                 return Some(MarketCorrelation {
                     market_a: parent.market.clone(),
@@ -213,14 +243,14 @@ impl ParallelScanner {
                     strength: 0.95,
                 });
             }
-            
+
             // For "dip to $X" markets: lower price is child of higher price
-            // If it dipped to $50k, it MUST have dipped to $90k first  
+            // If it dipped to $50k, it MUST have dipped to $90k first
             if is_dip_a && is_dip_b && pa != pb {
                 let (parent, child) = if pa > pb {
-                    (market_a, market_b)  // Higher price is parent
+                    (market_a, market_b) // Higher price is parent
                 } else {
-                    (market_b, market_a)  // Higher price is parent
+                    (market_b, market_a) // Higher price is parent
                 };
                 return Some(MarketCorrelation {
                     market_a: parent.market.clone(),
@@ -264,37 +294,41 @@ impl ParallelScanner {
 
         None
     }
-    
+
     /// Extract price target from question (e.g., "$100,000" -> 100000)
     fn extract_price_target(&self, question: &str) -> Option<u64> {
         // Match patterns like $100,000 or $100000 or $100k
         let re_full = regex::Regex::new(r"\$(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)").ok()?;
         let re_k = regex::Regex::new(r"\$(\d+(?:\.\d+)?)\s*k").ok()?;
-        
+
         if let Some(cap) = re_k.captures(question) {
             let num_str = cap.get(1)?.as_str();
             let num: f64 = num_str.parse().ok()?;
             return Some((num * 1000.0) as u64);
         }
-        
+
         if let Some(cap) = re_full.captures(question) {
             let num_str = cap.get(1)?.as_str().replace(",", "");
             let num: f64 = num_str.parse().ok()?;
             return Some(num as u64);
         }
-        
+
         None
     }
 
     /// Count common significant words between two questions
     fn find_common_significant_words(&self, q_a: &str, q_b: &str) -> usize {
-        let stop_words = ["will", "the", "a", "an", "to", "be", "in", "on", "at", "by", "for", "or", "and", "of"];
+        let stop_words = [
+            "will", "the", "a", "an", "to", "be", "in", "on", "at", "by", "for", "or", "and", "of",
+        ];
 
-        let words_a: std::collections::HashSet<_> = q_a.split_whitespace()
+        let words_a: std::collections::HashSet<_> = q_a
+            .split_whitespace()
             .filter(|w| w.len() > 2 && !stop_words.contains(w))
             .collect();
 
-        let words_b: std::collections::HashSet<_> = q_b.split_whitespace()
+        let words_b: std::collections::HashSet<_> = q_b
+            .split_whitespace()
             .filter(|w| w.len() > 2 && !stop_words.contains(w))
             .collect();
 
@@ -319,7 +353,8 @@ impl ParallelScanner {
         let total_price: Decimal = best_asks.iter().map(|(_, price, _)| *price).sum();
 
         // Find minimum liquidity across all outcomes
-        let min_liquidity = best_asks.iter()
+        let min_liquidity = best_asks
+            .iter()
             .map(|(_, _, size)| *size)
             .min()
             .unwrap_or(Decimal::ZERO);
@@ -345,10 +380,13 @@ impl ParallelScanner {
         let expected_profit = position_size * edge;
 
         // Build outcome details
-        let outcomes: Vec<OutcomePrice> = best_asks.iter()
+        let outcomes: Vec<OutcomePrice> = best_asks
+            .iter()
             .enumerate()
             .map(|(i, (asset_id, price, size))| {
-                let name = market.outcomes.get(i)
+                let name = market
+                    .outcomes
+                    .get(i)
                     .map(|o| o.name.clone())
                     .unwrap_or_else(|| format!("Outcome_{}", i));
                 OutcomePrice {
@@ -392,7 +430,8 @@ impl ParallelScanner {
         let start = std::time::Instant::now();
 
         // Filter to multi-outcome markets only (3+ outcomes)
-        let multi_markets: Vec<_> = markets.iter()
+        let multi_markets: Vec<_> = markets
+            .iter()
             .filter(|m| m.outcomes.len() >= 3)
             .cloned()
             .collect();
@@ -402,7 +441,11 @@ impl ParallelScanner {
             return Vec::new();
         }
 
-        debug!("Scanning {} multi-outcome markets across {} workers", multi_markets.len(), NUM_WORKERS);
+        debug!(
+            "Scanning {} multi-outcome markets across {} workers",
+            multi_markets.len(),
+            NUM_WORKERS
+        );
 
         // Scan all markets (OrderBookManager is thread-safe via DashMap)
         let mut all_opportunities: Vec<MultiOutcomeOpportunity> = Vec::new();
@@ -454,12 +497,15 @@ impl ParallelScanner {
 
         // Check each correlated pair for pricing inconsistencies
         for corr in correlations.iter() {
-            if let Some(opp) = self.check_cross_market_opportunity(
-                &corr.market_a,
-                &corr.market_b,
-                &corr.correlation_type,
-                orderbook_manager,
-            ).await {
+            if let Some(opp) = self
+                .check_cross_market_opportunity(
+                    &corr.market_a,
+                    &corr.market_b,
+                    &corr.correlation_type,
+                    orderbook_manager,
+                )
+                .await
+            {
                 if opp.edge >= self.config.trading.min_edge {
                     opportunities.push(opp);
                 }
@@ -491,14 +537,17 @@ impl ParallelScanner {
         // Get best ask prices for YES outcomes (cost to buy YES)
         let yes_ask_a = books_a.books.first()?.best_ask()?.0;
         let yes_ask_b = books_b.books.first()?.best_ask()?.0;
-        
+
         // Get best bid prices for YES outcomes (what we'd get selling YES / buying NO)
-        let yes_bid_a = books_a.books.first()?.best_bid()?.0;
+        let _yes_bid_a = books_a.books.first()?.best_bid()?.0;
         let yes_bid_b = books_b.books.first()?.best_bid()?.0;
-        
+
         // Skip markets that look resolved (price at 0 or 1)
-        if yes_ask_a <= dec!(0.01) || yes_ask_a >= dec!(0.99) ||
-           yes_ask_b <= dec!(0.01) || yes_ask_b >= dec!(0.99) {
+        if yes_ask_a <= dec!(0.01)
+            || yes_ask_a >= dec!(0.99)
+            || yes_ask_b <= dec!(0.01)
+            || yes_ask_b >= dec!(0.99)
+        {
             return None;
         }
 
@@ -507,23 +556,25 @@ impl ParallelScanner {
                 // A is parent of B means: If B happens, A must happen
                 // Example: "Bitcoin $150k" (B) implies "Bitcoin $100k" (A)
                 // Constraint: P(B) <= P(A) always
-                // 
+                //
                 // Arbitrage if: P(B) > P(A) - we can sell YES on B, buy YES on A
                 // Or equivalently: buy NO on B and YES on A
                 //
                 // Real check: Can we buy both YES_A and NO_B for less than $1?
                 // Cost = yes_ask_a + (1 - yes_bid_b) = yes_ask_a + 1 - yes_bid_b
                 // If cost < 1, profit = 1 - cost
-                
+
                 let cost_to_lock = yes_ask_a + (dec!(1.0) - yes_bid_b);
-                
-                if cost_to_lock < dec!(0.98) { // 2% minimum edge for fees
+
+                if cost_to_lock < dec!(0.98) {
+                    // 2% minimum edge for fees
                     let edge = dec!(1.0) - cost_to_lock;
                     let position = Decimal::from(self.config.trading.max_arb_size);
                     let fee = position * dec!(0.02); // ~2% Polymarket fee
                     let profit = (position * edge) - fee;
-                    
-                    if profit > dec!(0.50) { // Minimum $0.50 profit
+
+                    if profit > dec!(0.50) {
+                        // Minimum $0.50 profit
                         return Some(CrossMarketOpportunity {
                             market_a_id: market_a_id.to_string(),
                             market_b_id: market_b_id.to_string(),
@@ -543,13 +594,13 @@ impl ParallelScanner {
                 // A and B are mutually exclusive: P(A) + P(B) <= 1
                 // If sum < 1, buy both YES positions
                 let cost = yes_ask_a + yes_ask_b;
-                
+
                 if cost < dec!(0.98) {
                     let edge = dec!(1.0) - cost;
                     let position = Decimal::from(self.config.trading.max_arb_size);
                     let fee = position * dec!(0.02);
                     let profit = (position * edge) - fee;
-                    
+
                     if profit > dec!(0.50) {
                         return Some(CrossMarketOpportunity {
                             market_a_id: market_a_id.to_string(),

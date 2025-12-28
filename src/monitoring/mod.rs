@@ -1,22 +1,22 @@
-use crate::executor::ExecutionResult;
 use crate::arb_engine::ArbitrageOpportunity;
+use crate::executor::ExecutionResult;
 use crate::risk::RiskManager;
 use crate::utils::{Config, LatencyTracker};
+use anyhow::Result;
 use axum::{
     extract::{Query, State},
     response::Json,
     routing::get,
     Router,
 };
-use serde::{Serialize, Deserialize};
-use std::sync::Arc;
-use std::time::Instant;
-use std::collections::VecDeque;
-use std::str::FromStr;
-use anyhow::Result;
-use tracing::{info, warn, error};
 use chrono::Utc;
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Instant;
+use tracing::{error, info, warn};
 
 const MAX_RECENT_TRADES: usize = 100;
 #[allow(dead_code)]
@@ -95,7 +95,9 @@ impl Monitor {
         Ok(Self {
             config: Arc::new(config.clone()),
             metrics: Arc::new(tokio::sync::RwLock::new(Self::empty_metrics())),
-            recent_trades: Arc::new(tokio::sync::RwLock::new(VecDeque::with_capacity(MAX_RECENT_TRADES))),
+            recent_trades: Arc::new(tokio::sync::RwLock::new(VecDeque::with_capacity(
+                MAX_RECENT_TRADES,
+            ))),
             alerts: Arc::new(tokio::sync::RwLock::new(VecDeque::with_capacity(500))),
             start_time: Instant::now(),
             latency_tracker: LatencyTracker::new(),
@@ -127,7 +129,11 @@ impl Monitor {
 
         let alert = Alert {
             alert_type: AlertType::ArbitrageDetected,
-            message: format!("Arbitrage detected: {} ({:.2}% edge)", arb_op.market_id, arb_op.total_edge * rust_decimal::Decimal::ONE_HUNDRED),
+            message: format!(
+                "Arbitrage detected: {} ({:.2}% edge)",
+                arb_op.market_id,
+                arb_op.total_edge * rust_decimal::Decimal::ONE_HUNDRED
+            ),
             timestamp: Utc::now().timestamp(),
             severity: if arb_op.total_edge > Decimal::from_str("0.04").unwrap() {
                 AlertSeverity::Info
@@ -153,7 +159,9 @@ impl Monitor {
             arb_op.net_profit
         );
 
-        if self.config.alerts.enable_telegram && arb_op.position_size >= self.config.alerts.alert_on_trade_usd.into() {
+        if self.config.alerts.enable_telegram
+            && arb_op.position_size >= self.config.alerts.alert_on_trade_usd.into()
+        {
             self.send_telegram_alert(&alert).await;
         }
     }
@@ -204,7 +212,9 @@ impl Monitor {
             result.success
         );
 
-        if self.config.alerts.enable_telegram && arb_op.position_size >= self.config.alerts.alert_on_trade_usd.into() {
+        if self.config.alerts.enable_telegram
+            && arb_op.position_size >= self.config.alerts.alert_on_trade_usd.into()
+        {
             let alert = Alert {
                 alert_type: AlertType::TradeExecuted,
                 message: format!(
@@ -226,7 +236,10 @@ impl Monitor {
         if current_latency_ms > threshold_ms {
             let alert = Alert {
                 alert_type: AlertType::LatencySpike,
-                message: format!("Latency spike detected: {}ms > {}ms", current_latency_ms, threshold_ms),
+                message: format!(
+                    "Latency spike detected: {}ms > {}ms",
+                    current_latency_ms, threshold_ms
+                ),
                 timestamp: Utc::now().timestamp(),
                 severity: AlertSeverity::Warning,
             };
@@ -310,11 +323,7 @@ impl Monitor {
             AlertSeverity::Critical => "🚨",
         };
 
-        let message = format!(
-            "{} HFTPM Alert\n\n{}",
-            severity_icon,
-            alert.message
-        );
+        let message = format!("{} HFTPM Alert\n\n{}", severity_icon, alert.message);
 
         let url = format!(
             "https://api.telegram.org/bot{}/sendMessage?chat_id={}&text={}",
@@ -345,55 +354,60 @@ impl Monitor {
             .route("/health", get(Self::health_handler))
             .with_state((metrics, recent_trades, alerts));
 
-        let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", config.monitoring.dashboard_port))
-            .await
-            .unwrap();
+        let listener =
+            tokio::net::TcpListener::bind(format!("0.0.0.0:{}", config.monitoring.dashboard_port))
+                .await
+                .unwrap();
 
-        info!("🌐 Dashboard started on http://0.0.0.0:{}", config.monitoring.dashboard_port);
+        info!(
+            "🌐 Dashboard started on http://0.0.0.0:{}",
+            config.monitoring.dashboard_port
+        );
 
         tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
     }
 
+    #[allow(clippy::type_complexity)]
     async fn metrics_handler(
-        State((metrics, _, _)): State<(Arc<tokio::sync::RwLock<Metrics>>, Arc<tokio::sync::RwLock<VecDeque<TradeRecord>>>, Arc<tokio::sync::RwLock<VecDeque<Alert>>>)>
+        State((metrics, _, _)): State<(
+            Arc<tokio::sync::RwLock<Metrics>>,
+            Arc<tokio::sync::RwLock<VecDeque<TradeRecord>>>,
+            Arc<tokio::sync::RwLock<VecDeque<Alert>>>,
+        )>,
     ) -> Json<Metrics> {
         Json(metrics.read().await.clone())
     }
 
+    #[allow(clippy::type_complexity)]
     async fn trades_handler(
-        State((_, recent_trades, _)): State<(Arc<tokio::sync::RwLock<Metrics>>, Arc<tokio::sync::RwLock<VecDeque<TradeRecord>>>, Arc<tokio::sync::RwLock<VecDeque<Alert>>>)>,
+        State((_, recent_trades, _)): State<(
+            Arc<tokio::sync::RwLock<Metrics>>,
+            Arc<tokio::sync::RwLock<VecDeque<TradeRecord>>>,
+            Arc<tokio::sync::RwLock<VecDeque<Alert>>>,
+        )>,
         Query(query): Query<LimitQuery>,
     ) -> Json<Vec<TradeRecord>> {
         let trades = recent_trades.read().await;
         let limit = query.limit.unwrap_or(50).min(MAX_RECENT_TRADES);
 
-        Json(
-            trades
-                .iter()
-                .rev()
-                .take(limit)
-                .cloned()
-                .collect()
-        )
+        Json(trades.iter().rev().take(limit).cloned().collect())
     }
 
+    #[allow(clippy::type_complexity)]
     async fn alerts_handler(
-        State((_, _, alerts)): State<(Arc<tokio::sync::RwLock<Metrics>>, Arc<tokio::sync::RwLock<VecDeque<TradeRecord>>>, Arc<tokio::sync::RwLock<VecDeque<Alert>>>)>,
+        State((_, _, alerts)): State<(
+            Arc<tokio::sync::RwLock<Metrics>>,
+            Arc<tokio::sync::RwLock<VecDeque<TradeRecord>>>,
+            Arc<tokio::sync::RwLock<VecDeque<Alert>>>,
+        )>,
         Query(query): Query<LimitQuery>,
     ) -> Json<Vec<Alert>> {
         let alerts_list = alerts.read().await;
         let limit = query.limit.unwrap_or(50);
 
-        Json(
-            alerts_list
-                .iter()
-                .rev()
-                .take(limit)
-                .cloned()
-                .collect()
-        )
+        Json(alerts_list.iter().rev().take(limit).cloned().collect())
     }
 
     async fn health_handler() -> Json<serde_json::Value> {
@@ -406,9 +420,7 @@ impl Monitor {
     #[inline]
     pub fn get_metrics(&self) -> Metrics {
         tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                self.metrics.read().await.clone()
-            })
+            tokio::runtime::Handle::current().block_on(async { self.metrics.read().await.clone() })
         })
     }
 }

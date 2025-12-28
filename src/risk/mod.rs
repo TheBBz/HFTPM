@@ -1,12 +1,12 @@
 use crate::arb_engine::ArbitrageOpportunity;
 use crate::executor::ExecutionResult;
 use crate::utils::Config;
+use anyhow::Result;
+use chrono::Utc;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::sync::Arc;
-use anyhow::Result;
-use tracing::{info, warn, debug};
-use chrono::Utc;
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone)]
 pub struct Position {
@@ -78,10 +78,7 @@ impl RiskManager {
     }
 
     #[inline]
-    pub fn can_execute_arbitrage(
-        &mut self,
-        arb_op: &ArbitrageOpportunity,
-    ) -> Result<bool> {
+    pub fn can_execute_arbitrage(&mut self, arb_op: &ArbitrageOpportunity) -> Result<bool> {
         let today = Utc::now().format("%Y-%m-%d").to_string();
 
         if self.daily_pnl.date != today {
@@ -91,8 +88,7 @@ impl RiskManager {
         if self.active_arbs >= self.config.risk.max_concurrent_arbs {
             debug!(
                 "Max concurrent arbs reached: {} >= {}",
-                self.active_arbs,
-                self.config.risk.max_concurrent_arbs
+                self.active_arbs, self.config.risk.max_concurrent_arbs
             );
             return Ok(false);
         }
@@ -100,13 +96,13 @@ impl RiskManager {
         if self.daily_pnl.total_pnl < -Decimal::from(self.config.risk.daily_loss_limit) {
             warn!(
                 "⚠️  Daily loss limit reached: ${:.2} < ${}",
-                self.daily_pnl.total_pnl,
-                self.config.risk.daily_loss_limit
+                self.daily_pnl.total_pnl, self.config.risk.daily_loss_limit
             );
             return Ok(false);
         }
 
-        let current_market_exposure = self.market_exposure
+        let current_market_exposure = self
+            .market_exposure
             .get(&arb_op.market_id)
             .copied()
             .unwrap_or(Decimal::ZERO);
@@ -116,8 +112,7 @@ impl RiskManager {
         if new_market_exposure > self.config.risk.max_exposure_per_market.into() {
             debug!(
                 "Market exposure limit: ${:.2} > ${}",
-                new_market_exposure,
-                self.config.risk.max_exposure_per_market
+                new_market_exposure, self.config.risk.max_exposure_per_market
             );
             return Ok(false);
         }
@@ -163,11 +158,13 @@ impl RiskManager {
                     edge.expected_cost,
                 )?;
 
-                *self.market_exposure
+                *self
+                    .market_exposure
                     .entry(arb_op.market_id.clone())
                     .or_insert(Decimal::ZERO) += edge.size;
 
-                *self.event_exposure
+                *self
+                    .event_exposure
                     .entry(arb_op.market_id.clone())
                     .or_insert(Decimal::ZERO) += edge.size;
             }
@@ -181,8 +178,7 @@ impl RiskManager {
 
             info!(
                 "📊 Recorded arbitrage execution: ${:.2} profit, {} active arbs",
-                arb_op.net_profit,
-                self.active_arbs
+                arb_op.net_profit, self.active_arbs
             );
         }
 
@@ -193,7 +189,9 @@ impl RiskManager {
 
     #[inline]
     pub fn is_market_blacklisted(&self, market_id: &str) -> bool {
-        self.config.markets.blacklisted_markets
+        self.config
+            .markets
+            .blacklisted_markets
             .iter()
             .any(|blacklisted| market_id.contains(blacklisted))
     }
@@ -230,6 +228,7 @@ impl RiskManager {
     }
 
     #[inline]
+    #[allow(clippy::too_many_arguments)]
     fn add_position(
         &mut self,
         market_id: String,
@@ -310,9 +309,7 @@ impl RiskManager {
             if now - position.entry_time > timeout_secs as i64 {
                 stale_asset_ids.push(asset_id.clone());
 
-                *self.market_exposure
-                    .get_mut(&position.market_id)
-                    .unwrap() -= position.size;
+                *self.market_exposure.get_mut(&position.market_id).unwrap() -= position.size;
 
                 self.active_arbs = self.active_arbs.saturating_sub(1);
 
@@ -335,8 +332,7 @@ impl RiskManager {
     fn reset_daily_pnl(&mut self, today: &str) {
         info!(
             "🔄 Resetting daily PnL: ${:.2} -> $0.00 ({} trades)",
-            self.daily_pnl.total_pnl,
-            self.daily_pnl.trade_count
+            self.daily_pnl.total_pnl, self.daily_pnl.trade_count
         );
 
         self.daily_pnl = DailyPnlTracker {

@@ -1,27 +1,22 @@
-use crate::utils::ScopedTimer;
 use crate::arb_engine::ArbitrageOpportunity;
-use polymarket_client_sdk::clob::{
-    Client,
-    Config as ClobConfig,
-    types::{
-        OrderType,
-        Side,
-        SignedOrder as SdkSignedOrder,
-        PostOrderResponse,
-        CancelOrdersResponse,
-        BalanceAllowanceResponse,
-    },
-};
-use polymarket_client_sdk::auth::{state::Authenticated, Normal};
-use rust_decimal::Decimal;
-use std::sync::Arc;
-use anyhow::{Result, Context};
-use tracing::{info, error, warn};
-use futures::future::join_all;
-use std::time::Instant;
+use crate::utils::ScopedTimer;
 use alloy::signers::{local::PrivateKeySigner, Signer};
-use std::collections::VecDeque;
+use anyhow::{Context, Result};
+use futures::future::join_all;
+use polymarket_client_sdk::auth::{state::Authenticated, Normal};
+use polymarket_client_sdk::clob::{
+    types::{
+        BalanceAllowanceResponse, CancelOrdersResponse, OrderType, PostOrderResponse, Side,
+        SignedOrder as SdkSignedOrder,
+    },
+    Client, Config as ClobConfig,
+};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::time::Instant;
+use tracing::{error, info, warn};
 
 #[derive(Debug, Clone)]
 pub struct SignedOrder {
@@ -101,9 +96,16 @@ impl SimulationExecutor {
     ) -> Result<ExecutionResult> {
         let start_time = Instant::now();
 
-        info!("🎮 SIMULATED: Executing arbitrage for market {}", arb_op.market_id);
+        info!(
+            "🎮 SIMULATED: Executing arbitrage for market {}",
+            arb_op.market_id
+        );
 
-        let total_cost = arb_op.edges.iter().map(|e| e.expected_cost).sum::<Decimal>();
+        let total_cost = arb_op
+            .edges
+            .iter()
+            .map(|e| e.expected_cost)
+            .sum::<Decimal>();
         let expected_payout = arb_op.position_size;
         let fee_cost = arb_op.fee_cost;
         let net_profit = arb_op.net_profit;
@@ -111,7 +113,10 @@ impl SimulationExecutor {
         let mut balance = self.simulated_balance.write().await;
 
         if *balance < total_cost {
-            warn!("🎮 SIMULATED: Insufficient balance: ${:.2} < ${:.2}", *balance, total_cost);
+            warn!(
+                "🎮 SIMULATED: Insufficient balance: ${:.2} < ${:.2}",
+                *balance, total_cost
+            );
             return Ok(ExecutionResult {
                 success: false,
                 filled: false,
@@ -139,12 +144,16 @@ impl SimulationExecutor {
                 .as_secs() as i64,
             market_id: arb_op.market_id.clone(),
             arb_type: format!("{:?}", arb_op.arb_type),
-            edges: arb_op.edges.iter().map(|e| SimulatedEdge {
-                asset_id: e.asset_id.clone(),
-                price: e.price,
-                size: e.size,
-                cost: e.expected_cost,
-            }).collect(),
+            edges: arb_op
+                .edges
+                .iter()
+                .map(|e| SimulatedEdge {
+                    asset_id: e.asset_id.clone(),
+                    price: e.price,
+                    size: e.size,
+                    cost: e.expected_cost,
+                })
+                .collect(),
             total_cost,
             expected_payout,
             net_profit,
@@ -163,12 +172,16 @@ impl SimulationExecutor {
             net_profit, current_balance, total_pnl
         );
 
-        let order_results: Vec<OrderResult> = arb_op.edges.iter().map(|edge| OrderResult {
-            asset_id: edge.asset_id.clone(),
-            success: true,
-            order_id: Some(format!("SIM_{}", uuid::Uuid::new_v4())),
-            error: None,
-        }).collect();
+        let order_results: Vec<OrderResult> = arb_op
+            .edges
+            .iter()
+            .map(|edge| OrderResult {
+                asset_id: edge.asset_id.clone(),
+                success: true,
+                order_id: Some(format!("SIM_{}", uuid::Uuid::new_v4())),
+                error: None,
+            })
+            .collect();
 
         Ok(ExecutionResult {
             success: true,
@@ -207,9 +220,9 @@ impl OrderExecutor {
         let private_key = &config.credentials.private_key;
 
         // Parse the private key for signing with Polygon chain ID (137)
-        let mut signer: PrivateKeySigner = private_key.parse()
-            .context("Failed to parse private key")?;
-        
+        let mut signer: PrivateKeySigner =
+            private_key.parse().context("Failed to parse private key")?;
+
         // Set chain ID for Polygon
         signer.set_chain_id(Some(137));
 
@@ -252,17 +265,20 @@ impl OrderExecutor {
         Ok(true) // Placeholder: implement actual check against fresh orderbook data
     }
 
-    pub async fn execute_arbitrage(&self, arb_op: &ArbitrageOpportunity) -> Result<ExecutionResult> {
+    pub async fn execute_arbitrage(
+        &self,
+        arb_op: &ArbitrageOpportunity,
+    ) -> Result<ExecutionResult> {
         let _timer = ScopedTimer::new("execute_arbitrage", None);
 
-        info!(
-            "🎯 Executing arbitrage for market {}",
-            arb_op.market_id
-        );
+        info!("🎯 Executing arbitrage for market {}", arb_op.market_id);
 
         // Validate prices haven't moved beyond slippage tolerance
         if !self.validate_prices(arb_op).await? {
-            warn!("⚠️ Price slippage detected for {}, aborting execution", arb_op.market_id);
+            warn!(
+                "⚠️ Price slippage detected for {}, aborting execution",
+                arb_op.market_id
+            );
             return Ok(ExecutionResult {
                 success: false,
                 filled: false,
@@ -288,23 +304,34 @@ impl OrderExecutor {
         let submission_results = self.submit_orders_parallel(&signed_orders).await?;
 
         let success_count = submission_results.iter().filter(|r| r.success).count();
-        let filled_count = submission_results.iter().filter(|r| r.success && r.order_id.is_some()).count();
+        let filled_count = submission_results
+            .iter()
+            .filter(|r| r.success && r.order_id.is_some())
+            .count();
 
         let total_cost = submission_results
             .iter()
             .filter(|r| r.success)
-            .map(|r| arb_op.edges.iter()
-                .find(|e| e.asset_id == r.asset_id)
-                .map(|e| e.expected_cost)
-                .unwrap_or(Decimal::ZERO))
+            .map(|r| {
+                arb_op
+                    .edges
+                    .iter()
+                    .find(|e| e.asset_id == r.asset_id)
+                    .map(|e| e.expected_cost)
+                    .unwrap_or(Decimal::ZERO)
+            })
             .sum::<Decimal>();
 
-        let filled_amount = arb_op.edges.iter()
-            .filter_map(|edge| submission_results
-                .iter()
-                .find(|r| r.asset_id == edge.asset_id && r.success)
-                .and_then(|r| r.order_id.as_ref())
-                .map(|_| edge.size))
+        let filled_amount = arb_op
+            .edges
+            .iter()
+            .filter_map(|edge| {
+                submission_results
+                    .iter()
+                    .find(|r| r.asset_id == edge.asset_id && r.success)
+                    .and_then(|r| r.order_id.as_ref())
+                    .map(|_| edge.size)
+            })
             .sum::<Decimal>();
 
         let execution_time = start_time.elapsed();
@@ -332,7 +359,11 @@ impl OrderExecutor {
             orders: submission_results,
             execution_time_ms,
             error_message: if !all_success {
-                Some(format!("Only {}/{} orders succeeded", success_count, signed_orders.len()))
+                Some(format!(
+                    "Only {}/{} orders succeeded",
+                    success_count,
+                    signed_orders.len()
+                ))
             } else {
                 None
             },
@@ -350,7 +381,8 @@ impl OrderExecutor {
             let price = edge.price;
             let size = edge.size;
 
-            let signable_order = self.clob_client
+            let signable_order = self
+                .clob_client
                 .limit_order()
                 .token_id(&edge.asset_id)
                 .size(size)
@@ -361,7 +393,8 @@ impl OrderExecutor {
                 .await
                 .context("Failed to build order")?;
 
-            let sdk_signed_order: SdkSignedOrder = self.clob_client
+            let sdk_signed_order: SdkSignedOrder = self
+                .clob_client
                 .sign(&self.signer, signable_order)
                 .await
                 .context("Failed to sign order")?;
@@ -380,7 +413,10 @@ impl OrderExecutor {
         Ok(signed_orders)
     }
 
-    async fn submit_orders_parallel(&self, signed_orders: &[SignedOrder]) -> Result<Vec<OrderResult>> {
+    async fn submit_orders_parallel(
+        &self,
+        signed_orders: &[SignedOrder],
+    ) -> Result<Vec<OrderResult>> {
         let futures: Vec<_> = signed_orders
             .iter()
             .map(|signed_order| self.submit_single_order(signed_order))
@@ -393,7 +429,8 @@ impl OrderExecutor {
 
     async fn submit_single_order(&self, signed_order: &SignedOrder) -> OrderResult {
         // Re-create and sign the order for submission
-        let signable_order = match self.clob_client
+        let signable_order = match self
+            .clob_client
             .limit_order()
             .token_id(&signed_order.asset_id)
             .size(signed_order.size)
@@ -405,7 +442,10 @@ impl OrderExecutor {
         {
             Ok(order) => order,
             Err(e) => {
-                error!("❌ Failed to build order: {} - {}", signed_order.asset_id, e);
+                error!(
+                    "❌ Failed to build order: {} - {}",
+                    signed_order.asset_id, e
+                );
                 return OrderResult {
                     asset_id: signed_order.asset_id.clone(),
                     success: false,
@@ -415,29 +455,29 @@ impl OrderExecutor {
             }
         };
 
-        let sdk_signed: SdkSignedOrder = match self.clob_client
-            .sign(&self.signer, signable_order)
-            .await
-        {
-            Ok(signed) => signed,
-            Err(e) => {
-                error!("❌ Failed to sign order: {} - {}", signed_order.asset_id, e);
-                return OrderResult {
-                    asset_id: signed_order.asset_id.clone(),
-                    success: false,
-                    order_id: None,
-                    error: Some(e.to_string()),
-                };
-            }
-        };
+        let sdk_signed: SdkSignedOrder =
+            match self.clob_client.sign(&self.signer, signable_order).await {
+                Ok(signed) => signed,
+                Err(e) => {
+                    error!("❌ Failed to sign order: {} - {}", signed_order.asset_id, e);
+                    return OrderResult {
+                        asset_id: signed_order.asset_id.clone(),
+                        success: false,
+                        order_id: None,
+                        error: Some(e.to_string()),
+                    };
+                }
+            };
 
-        let response: Result<Vec<PostOrderResponse>, _> = self.clob_client
-            .post_order(sdk_signed)
-            .await;
+        let response: Result<Vec<PostOrderResponse>, _> =
+            self.clob_client.post_order(sdk_signed).await;
 
         match response {
             Ok(responses) => {
-                info!("✅ Order submitted: {} - {:?}", signed_order.asset_id, responses);
+                info!(
+                    "✅ Order submitted: {} - {:?}",
+                    signed_order.asset_id, responses
+                );
                 OrderResult {
                     asset_id: signed_order.asset_id.clone(),
                     success: true,
@@ -460,7 +500,8 @@ impl OrderExecutor {
     pub async fn cancel_open_orders(&self, _market_id: &str) -> Result<usize> {
         info!("🗑️  Cancelling orders");
 
-        let response: CancelOrdersResponse = self.clob_client
+        let response: CancelOrdersResponse = self
+            .clob_client
             .cancel_all_orders()
             .await
             .context("Failed to cancel orders")?;
@@ -475,7 +516,8 @@ impl OrderExecutor {
         use polymarket_client_sdk::clob::types::BalanceAllowanceRequest;
 
         let request = BalanceAllowanceRequest::default();
-        let response: BalanceAllowanceResponse = self.clob_client
+        let response: BalanceAllowanceResponse = self
+            .clob_client
             .balance_allowance(&request)
             .await
             .context("Failed to get balance")?;
@@ -495,7 +537,7 @@ impl OrderExecutor {
 
     #[inline]
     fn calculate_order_hash(&self, _signed_order: &SdkSignedOrder) -> String {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
 
         let mut hasher = Sha256::new();
         let now = std::time::SystemTime::now()

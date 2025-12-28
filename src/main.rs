@@ -1,5 +1,5 @@
-use std::env;
 use anyhow::Result;
+use std::env;
 use tracing::error;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]

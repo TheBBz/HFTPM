@@ -1,9 +1,9 @@
+use anyhow::{Context, Result};
 use config::{Config as ConfigLoader, Environment};
 use serde::{Deserialize, Serialize};
-use std::time::Instant;
 use std::path::Path;
+use std::time::Instant;
 use tracing::info;
-use anyhow::{Result, Context};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -15,11 +15,11 @@ pub enum TradingMode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Strategy {
-    Arbitrage,      // Original YES+NO < 1.0 detection (rare opportunities)
-    MarketMaking,   // RN1-style: Place limit orders, earn spread + rewards
-    VolumeFarming,  // RN1-style: Buy cheap contracts for volume/airdrop
+    Arbitrage,     // Original YES+NO < 1.0 detection (rare opportunities)
+    MarketMaking,  // RN1-style: Place limit orders, earn spread + rewards
+    VolumeFarming, // RN1-style: Buy cheap contracts for volume/airdrop
     #[default]
-    Hybrid,         // All strategies combined (recommended)
+    Hybrid, // All strategies combined (recommended)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,29 +72,60 @@ pub struct TradingConfig {
     pub slippage_tolerance: rust_decimal::Decimal,
     // Market Making parameters (RN1 strategy)
     #[serde(default = "default_spread_bps")]
-    pub mm_spread_bps: u64,              // Spread in basis points (e.g., 100 = 1%)
+    pub mm_spread_bps: u64, // Spread in basis points (e.g., 100 = 1%)
     #[serde(default = "default_order_size")]
-    pub mm_order_size: u64,              // Size per limit order in USD
+    pub mm_order_size: u64, // Size per limit order in USD
     #[serde(default = "default_max_orders")]
     pub mm_max_orders_per_market: usize, // Max open orders per market
     #[serde(default = "default_refresh_secs")]
-    pub mm_order_refresh_secs: u64,      // How often to refresh orders
+    pub mm_order_refresh_secs: u64, // How often to refresh orders
     // Volume Farming parameters (trash farming)
     #[serde(default = "default_max_price")]
-    pub vf_max_price: rust_decimal::Decimal,  // Max price for trash contracts (e.g., 0.05)
+    pub vf_max_price: rust_decimal::Decimal, // Max price for trash contracts (e.g., 0.05)
     #[serde(default = "default_min_volume")]
-    pub vf_min_volume_per_trade: u64,    // Min notional volume per trade
+    pub vf_min_volume_per_trade: u64, // Min notional volume per trade
     #[serde(default = "default_daily_budget")]
-    pub vf_daily_budget: u64,            // Daily budget for volume farming
+    pub vf_daily_budget: u64, // Daily budget for volume farming
+    // =========================================================================
+    // Short-Window Arbitrage (gabagool-style 15m Sum-<$1 arb)
+    // These markets cycle fast, so lower edge threshold is profitable
+    // =========================================================================
+    /// Lower min_edge for short-window markets (fast turnover = more cycles)
+    #[serde(default = "default_short_window_min_edge")]
+    pub short_window_min_edge: rust_decimal::Decimal,
+    /// Max position size for short-window arb (conservative)
+    #[serde(default = "default_short_window_max_size")]
+    pub short_window_max_size: u64,
 }
 
-fn default_spread_bps() -> u64 { 200 }        // 2% spread
-fn default_order_size() -> u64 { 50 }          // $50 per order
-fn default_max_orders() -> usize { 4 }         // 2 bids + 2 asks
-fn default_refresh_secs() -> u64 { 30 }        // Refresh every 30s
-fn default_max_price() -> rust_decimal::Decimal { rust_decimal::Decimal::new(5, 2) } // 0.05
-fn default_min_volume() -> u64 { 100 }         // $100 min volume per trash trade
-fn default_daily_budget() -> u64 { 20 }        // $20/day for volume farming
+fn default_short_window_min_edge() -> rust_decimal::Decimal {
+    rust_decimal::Decimal::new(8, 3) // 0.008 = 0.8% (lower than standard 1.2%)
+}
+fn default_short_window_max_size() -> u64 {
+    50 // $50 max per short-window arb (conservative)
+}
+
+fn default_spread_bps() -> u64 {
+    200
+} // 2% spread
+fn default_order_size() -> u64 {
+    50
+} // $50 per order
+fn default_max_orders() -> usize {
+    4
+} // 2 bids + 2 asks
+fn default_refresh_secs() -> u64 {
+    30
+} // Refresh every 30s
+fn default_max_price() -> rust_decimal::Decimal {
+    rust_decimal::Decimal::new(5, 2)
+} // 0.05
+fn default_min_volume() -> u64 {
+    100
+} // $100 min volume per trash trade
+fn default_daily_budget() -> u64 {
+    20
+} // $20/day for volume farming
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RiskConfig {
@@ -114,6 +145,37 @@ pub struct MarketsConfig {
     pub min_volume_24h: u64,
     pub min_traders_24h: u64,
     pub min_order_book_depth: usize,
+    // Short-window (15m up/down) market dynamic discovery settings
+    #[serde(default = "default_short_window_enabled")]
+    pub enable_short_window_markets: bool,
+    /// Markets resolving within this window (in minutes) qualify as "short-window"
+    #[serde(default = "default_short_window_minutes")]
+    pub short_window_minutes: u64,
+    /// Minimum minutes before expiry to avoid being picked off near settlement
+    #[serde(default = "default_min_minutes_to_expiry")]
+    pub min_minutes_to_expiry: u64,
+    /// Lower volume threshold for short-window markets (they're newer, less volume)
+    #[serde(default = "default_min_volume_24h_short")]
+    pub min_volume_24h_short: u64,
+    /// Require order book to be enabled (safety: always true for MM)
+    #[serde(default = "default_enforce_orderbook")]
+    pub enforce_enable_order_book: bool,
+}
+
+fn default_short_window_enabled() -> bool {
+    true
+}
+fn default_short_window_minutes() -> u64 {
+    30
+} // Markets resolving in next 30 min
+fn default_min_minutes_to_expiry() -> u64 {
+    2
+} // Skip if <2 min to expiry (avoid settlement risk)
+fn default_min_volume_24h_short() -> u64 {
+    100
+} // Lower volume bar for short-window markets
+fn default_enforce_orderbook() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,19 +224,18 @@ pub struct LatencyConfig {
 impl Config {
     pub fn load() -> Result<Self> {
         use config::File;
-        
+
         let settings = ConfigLoader::builder()
             // Load base config
             .add_source(File::with_name("config/config").required(true))
             // Load secrets (optional, can use env vars instead)
             .add_source(File::with_name("config/secrets").required(false))
             // Environment variables override files
-            .add_source(
-                Environment::default().prefix("HFTPM").separator("__")
-            )
+            .add_source(Environment::default().prefix("HFTPM").separator("__"))
             .build()?;
 
-        let config: Config = settings.try_deserialize()
+        let config: Config = settings
+            .try_deserialize()
             .context("Failed to deserialize config")?;
 
         if config.server.wss_url.is_empty() || config.server.rest_url.is_empty() {
@@ -199,14 +260,17 @@ impl Config {
 }
 
 pub fn setup_tracing(log_level: &str, log_file: &str) {
-    use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(log_level));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level));
 
     let file_appender = tracing_appender::rolling::daily(
-        Path::new(log_file).parent().unwrap_or_else(|| Path::new(".")),
-        Path::new(log_file).file_name().unwrap_or_else(|| std::ffi::OsStr::new("hfptm.log")),
+        Path::new(log_file)
+            .parent()
+            .unwrap_or_else(|| Path::new(".")),
+        Path::new(log_file)
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("hfptm.log")),
     );
 
     tracing_subscriber::registry()
@@ -215,9 +279,13 @@ pub fn setup_tracing(log_level: &str, log_file: &str) {
             fmt::layer()
                 .with_target(false)
                 .with_thread_ids(true)
-                .with_line_number(true)
+                .with_line_number(true),
         )
-        .with(tracing_subscriber::fmt::layer().json().with_writer(file_appender))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_writer(file_appender),
+        )
         .init();
 }
 
@@ -242,13 +310,13 @@ impl LatencyTracker {
         self.min_latency_ns = Some(
             self.min_latency_ns
                 .map(|min| min.min(latency_ns))
-                .unwrap_or(latency_ns)
+                .unwrap_or(latency_ns),
         );
 
         self.max_latency_ns = Some(
             self.max_latency_ns
                 .map(|max| max.max(latency_ns))
-                .unwrap_or(latency_ns)
+                .unwrap_or(latency_ns),
         );
 
         self.last_update = Some(Instant::now());

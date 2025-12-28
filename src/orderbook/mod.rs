@@ -1,3 +1,3 @@
 pub mod manager;
 
-pub use manager::{OrderBook, OrderBookManager, MarketBooks};
+pub use manager::{MarketBooks, OrderBook, OrderBookManager};

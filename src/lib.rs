@@ -1,26 +1,26 @@
-pub mod websocket;
-pub mod orderbook;
 pub mod arb_engine;
 pub mod executor;
-pub mod risk;
-pub mod monitoring;
 pub mod gamma_api;
-pub mod utils;
 pub mod market_maker;
-pub mod volume_farmer;
+pub mod monitoring;
+pub mod orderbook;
 pub mod parallel_scanner;
+pub mod risk;
+pub mod utils;
+pub mod volume_farmer;
+pub mod websocket;
 
-pub use websocket::WebSocketClient;
-pub use orderbook::{OrderBook, OrderBookManager};
 pub use arb_engine::{ArbEngine, ArbitrageOpportunity};
 pub use executor::{OrderExecutor, SignedOrder};
-pub use risk::{RiskManager, Position, Inventory};
-pub use monitoring::{Metrics, Monitor};
 pub use gamma_api::GammaClient;
-pub use utils::{Config, LatencyTracker, setup_tracing, Strategy};
 pub use market_maker::MarketMaker;
-pub use volume_farmer::VolumeFarmer;
+pub use monitoring::{Metrics, Monitor};
+pub use orderbook::{OrderBook, OrderBookManager};
 pub use parallel_scanner::ParallelScanner;
+pub use risk::{Inventory, Position, RiskManager};
+pub use utils::{setup_tracing, Config, LatencyTracker, Strategy};
+pub use volume_farmer::VolumeFarmer;
+pub use websocket::WebSocketClient;
 
 use anyhow::Result;
 use tracing::info;
@@ -60,13 +60,17 @@ pub async fn run() -> Result<()> {
         }
         utils::Strategy::MarketMaking => {
             info!("📊 Strategy: MARKET MAKING (RN1-style)");
-            info!("   Spread: {} bps | Order size: ${}",
-                config.trading.mm_spread_bps, config.trading.mm_order_size);
+            info!(
+                "   Spread: {} bps | Order size: ${}",
+                config.trading.mm_spread_bps, config.trading.mm_order_size
+            );
         }
         utils::Strategy::VolumeFarming => {
             info!("🗑️  Strategy: VOLUME FARMING (trash farming for airdrop)");
-            info!("   Max price: ${:.2} | Daily budget: ${}",
-                config.trading.vf_max_price, config.trading.vf_daily_budget);
+            info!(
+                "   Max price: ${:.2} | Daily budget: ${}",
+                config.trading.vf_max_price, config.trading.vf_daily_budget
+            );
         }
         utils::Strategy::Hybrid => {
             info!("🔄 Strategy: HYBRID (all strategies combined)");
@@ -99,7 +103,10 @@ pub async fn run() -> Result<()> {
     // Build correlation graph (uses 64GB RAM for caching relationships)
     info!("🔗 Building cross-market correlation graph (utilizing 64GB RAM)...");
     parallel_scanner.build_correlation_graph().await;
-    info!("✅ Correlation graph built: {} market pairs", parallel_scanner.num_correlations().await);
+    info!(
+        "✅ Correlation graph built: {} market pairs",
+        parallel_scanner.num_correlations().await
+    );
 
     info!("🔌 Creating WebSocket client...");
     let mut ws_client = WebSocketClient::new(&config, &markets).await?;
@@ -129,7 +136,7 @@ pub async fn run() -> Result<()> {
     tokio::select! {
         // Main WebSocket loop (for orderbook updates + arbitrage detection)
         result = ws_client.run(
-            &*orderbook_manager,
+            &orderbook_manager,
             &mut arb_engine,
             &mut risk_manager,
             &executor,
@@ -211,7 +218,7 @@ async fn run_periodic_strategies(
                 match strategy {
                     Strategy::Arbitrage | Strategy::Hybrid => {
                         // Scan for multi-outcome arbitrage (sum of all outcomes < $1)
-                        let multi_opps = parallel_scanner.scan_multi_outcome_parallel(&*orderbook_manager).await;
+                        let multi_opps = parallel_scanner.scan_multi_outcome_parallel(orderbook_manager).await;
                         if !multi_opps.is_empty() {
                             for opp in multi_opps.iter().take(3) {
                                 info!(
@@ -226,7 +233,7 @@ async fn run_periodic_strategies(
                         }
 
                         // Scan for cross-market arbitrage (logical inconsistencies)
-                        let cross_opps = parallel_scanner.scan_cross_market_parallel(&*orderbook_manager).await;
+                        let cross_opps = parallel_scanner.scan_cross_market_parallel(orderbook_manager).await;
                         if !cross_opps.is_empty() {
                             for opp in cross_opps.iter().take(3) {
                                 info!(
@@ -238,7 +245,7 @@ async fn run_periodic_strategies(
                                     opp.expected_profit
                                 );
                             }
-                            
+
                             // TODO: Execute cross-market trades
                             // For now, just log that we found opportunities
                             info!("📊 Found {} cross-market opportunities (execution not yet implemented)", cross_opps.len());
