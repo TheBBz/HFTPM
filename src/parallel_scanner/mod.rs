@@ -488,54 +488,82 @@ impl ParallelScanner {
         let books_a = orderbook_manager.get_market_books(market_a_id)?;
         let books_b = orderbook_manager.get_market_books(market_b_id)?;
 
-        // Get best ask prices for YES outcomes
-        let price_a = books_a.books.first()?.best_ask()?.0;
-        let price_b = books_b.books.first()?.best_ask()?.0;
+        // Get best ask prices for YES outcomes (cost to buy YES)
+        let yes_ask_a = books_a.books.first()?.best_ask()?.0;
+        let yes_ask_b = books_b.books.first()?.best_ask()?.0;
+        
+        // Get best bid prices for YES outcomes (what we'd get selling YES / buying NO)
+        let yes_bid_a = books_a.books.first()?.best_bid()?.0;
+        let yes_bid_b = books_b.books.first()?.best_bid()?.0;
+        
+        // Skip markets that look resolved (price at 0 or 1)
+        if yes_ask_a <= dec!(0.01) || yes_ask_a >= dec!(0.99) ||
+           yes_ask_b <= dec!(0.01) || yes_ask_b >= dec!(0.99) {
+            return None;
+        }
 
         match correlation_type {
             CorrelationType::Parent => {
-                // If A is parent of B, then P(A) >= P(B)
-                // If P(B) > P(A), that's an arbitrage opportunity
-                if price_b > price_a + dec!(0.01) {
-                    let edge = price_b - price_a;
+                // A is parent of B means: If B happens, A must happen
+                // Example: "Bitcoin $150k" (B) implies "Bitcoin $100k" (A)
+                // Constraint: P(B) <= P(A) always
+                // 
+                // Arbitrage if: P(B) > P(A) - we can sell YES on B, buy YES on A
+                // Or equivalently: buy NO on B and YES on A
+                //
+                // Real check: Can we buy both YES_A and NO_B for less than $1?
+                // Cost = yes_ask_a + (1 - yes_bid_b) = yes_ask_a + 1 - yes_bid_b
+                // If cost < 1, profit = 1 - cost
+                
+                let cost_to_lock = yes_ask_a + (dec!(1.0) - yes_bid_b);
+                
+                if cost_to_lock < dec!(0.98) { // 2% minimum edge for fees
+                    let edge = dec!(1.0) - cost_to_lock;
                     let position = Decimal::from(self.config.trading.max_arb_size);
-                    let profit = position * edge * dec!(0.98); // After 2% fee
-
-                    return Some(CrossMarketOpportunity {
-                        market_a_id: market_a_id.to_string(),
-                        market_b_id: market_b_id.to_string(),
-                        market_a_question: String::new(),
-                        market_b_question: String::new(),
-                        arb_type: CrossArbType::LogicalImplication,
-                        edge,
-                        position_size: position,
-                        expected_profit: profit,
-                        confidence: dec!(0.8),
-                        detected_at: chrono::Utc::now().timestamp(),
-                    });
+                    let fee = position * dec!(0.02); // ~2% Polymarket fee
+                    let profit = (position * edge) - fee;
+                    
+                    if profit > dec!(0.50) { // Minimum $0.50 profit
+                        return Some(CrossMarketOpportunity {
+                            market_a_id: market_a_id.to_string(),
+                            market_b_id: market_b_id.to_string(),
+                            market_a_question: format!("YES@{:.3}", yes_ask_a),
+                            market_b_question: format!("NO@{:.3}", dec!(1.0) - yes_bid_b),
+                            arb_type: CrossArbType::LogicalImplication,
+                            edge,
+                            position_size: position,
+                            expected_profit: profit,
+                            confidence: dec!(0.8),
+                            detected_at: chrono::Utc::now().timestamp(),
+                        });
+                    }
                 }
             }
             CorrelationType::Opposite => {
-                // If A and B are opposites, P(A) + P(B) should = 1
-                // If sum < 1, buy both; if sum > 1, sell both
-                let sum = price_a + price_b;
-                if sum < dec!(0.98) {
-                    let edge = dec!(1.0) - sum;
+                // A and B are mutually exclusive: P(A) + P(B) <= 1
+                // If sum < 1, buy both YES positions
+                let cost = yes_ask_a + yes_ask_b;
+                
+                if cost < dec!(0.98) {
+                    let edge = dec!(1.0) - cost;
                     let position = Decimal::from(self.config.trading.max_arb_size);
-                    let profit = position * edge * dec!(0.98);
-
-                    return Some(CrossMarketOpportunity {
-                        market_a_id: market_a_id.to_string(),
-                        market_b_id: market_b_id.to_string(),
-                        market_a_question: String::new(),
-                        market_b_question: String::new(),
-                        arb_type: CrossArbType::MutualExclusion,
-                        edge,
-                        position_size: position,
-                        confidence: dec!(0.9),
-                        expected_profit: profit,
-                        detected_at: chrono::Utc::now().timestamp(),
-                    });
+                    let fee = position * dec!(0.02);
+                    let profit = (position * edge) - fee;
+                    
+                    if profit > dec!(0.50) {
+                        return Some(CrossMarketOpportunity {
+                            market_a_id: market_a_id.to_string(),
+                            market_b_id: market_b_id.to_string(),
+                            market_a_question: format!("YES@{:.3}", yes_ask_a),
+                            market_b_question: format!("YES@{:.3}", yes_ask_b),
+                            arb_type: CrossArbType::MutualExclusion,
+                            edge,
+                            position_size: position,
+                            confidence: dec!(0.9),
+                            expected_profit: profit,
+                            detected_at: chrono::Utc::now().timestamp(),
+                        });
+                    }
                 }
             }
             _ => {}

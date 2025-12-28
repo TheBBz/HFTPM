@@ -230,12 +230,18 @@ async fn run_periodic_strategies(
                         if !cross_opps.is_empty() {
                             for opp in cross_opps.iter().take(3) {
                                 info!(
-                                    "🔗 CROSS-MARKET: {:?} | Edge: {:.2}% | Est. Profit: ${:.2}",
+                                    "🔗 CROSS-MARKET: {:?} | A:{} B:{} | Edge: {:.2}% | Est. Profit: ${:.2}",
                                     opp.arb_type,
+                                    opp.market_a_question,  // Now contains "YES@price" or "NO@price"
+                                    opp.market_b_question,
                                     opp.edge * rust_decimal::Decimal::from(100),
                                     opp.expected_profit
                                 );
                             }
+                            
+                            // TODO: Execute cross-market trades
+                            // For now, just log that we found opportunities
+                            info!("📊 Found {} cross-market opportunities (execution not yet implemented)", cross_opps.len());
                         }
                     }
                     _ => {}
