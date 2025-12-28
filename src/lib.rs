@@ -105,8 +105,18 @@ pub async fn run() -> Result<()> {
         config.trading.short_window_max_size
     );
 
-    let markets = gamma_client.fetch_markets(&config.markets).await?;
-    info!("📈 Loaded {} markets from Gamma API", markets.len());
+    // Fetch regular markets from /markets endpoint
+    let mut markets = gamma_client.fetch_markets(&config.markets).await?;
+    info!("📈 Loaded {} markets from Gamma API /markets endpoint", markets.len());
+
+    // Fetch short-window markets from /events endpoint (15m Up/Down markets)
+    // These are NOT in the /markets endpoint, only in /events
+    let short_window_markets = gamma_client.fetch_short_window_markets(&config.markets).await?;
+    if !short_window_markets.is_empty() {
+        info!("⚡ Adding {} short-window markets from /events endpoint", short_window_markets.len());
+        markets.extend(short_window_markets);
+    }
+    info!("📈 Total markets loaded: {}", markets.len());
 
     // Initialize parallel scanner for 16-core optimization
     let parallel_scanner = std::sync::Arc::new(ParallelScanner::new(&config, markets.clone()));

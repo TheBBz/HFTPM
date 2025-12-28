@@ -6,12 +6,123 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventInfo {
     pub id: String,
     pub title: Option<String>,
+}
+
+// =============================================================================
+// Event/Series API Response Types (for short-window market discovery)
+// =============================================================================
+
+/// Series metadata from events API (e.g., "BTC Up or Down 15m" series)
+#[derive(Debug, Clone, Deserialize)]
+pub struct EventSeries {
+    pub id: String,
+    pub slug: String,
+    pub title: String,
+    #[serde(default)]
+    pub recurrence: Option<String>, // "15m", "30m", etc.
+}
+
+/// Nested market within an event response
+#[derive(Debug, Clone, Deserialize)]
+pub struct EventMarket {
+    pub id: String,
+    pub question: String,
+    pub slug: String,
+    #[serde(rename = "conditionId")]
+    pub condition_id: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub outcomes: Option<String>, // JSON string: "[\"Up\", \"Down\"]"
+    #[serde(rename = "clobTokenIds", default)]
+    pub clob_token_ids: Option<String>, // JSON string with token IDs
+    #[serde(rename = "endDate")]
+    pub end_date: Option<String>,
+    #[serde(rename = "volume24hr", default)]
+    pub volume_24hr: Option<f64>,
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub closed: bool,
+    #[serde(rename = "enableOrderBook", default)]
+    pub enable_order_book: bool,
+    #[serde(rename = "acceptingOrders", default)]
+    pub accepting_orders: bool,
+}
+
+impl EventMarket {
+    /// Convert EventMarket to the standard Market struct
+    pub fn to_market(&self, event_id: &str, category: Option<String>) -> Option<Market> {
+        // Parse outcomes from JSON string
+        let outcomes = self.outcomes.as_ref().and_then(|s| {
+            serde_json::from_str::<Vec<String>>(s).ok()
+        }).unwrap_or_default();
+        
+        if outcomes.is_empty() {
+            return None;
+        }
+        
+        // Parse token IDs from JSON string
+        let token_ids = self.clob_token_ids.as_ref().and_then(|s| {
+            serde_json::from_str::<Vec<String>>(s).ok()
+        }).unwrap_or_default();
+        
+        if token_ids.len() != outcomes.len() {
+            return None;
+        }
+        
+        let outcome_structs: Vec<Outcome> = outcomes
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| Outcome {
+                id: i.to_string(),
+                name,
+                token_id: token_ids.get(i).cloned().unwrap_or_default(),
+            })
+            .collect();
+        
+        Some(Market {
+            id: self.id.clone(),
+            question: self.question.clone(),
+            slug: self.slug.clone(),
+            market: self.condition_id.clone(),
+            description: self.description.clone(),
+            outcomes: outcome_structs,
+            assets_ids: token_ids,
+            ticker_tag: category,
+            end_date: self.end_date.clone(),
+            volume_24h: self.volume_24hr,
+            active: self.active,
+            closed: self.closed,
+            enable_order_book: self.enable_order_book,
+            events: vec![EventInfo {
+                id: event_id.to_string(),
+                title: Some(self.question.clone()),
+            }],
+        })
+    }
+}
+
+/// Full event response from /events endpoint
+#[derive(Debug, Clone, Deserialize)]
+pub struct EventResponse {
+    pub id: String,
+    pub slug: String,
+    pub title: String,
+    #[serde(default)]
+    pub markets: Vec<EventMarket>,
+    #[serde(default)]
+    pub series: Vec<EventSeries>,
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub closed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -430,4 +541,98 @@ impl GammaClient {
             .cloned()
             .collect()
     }
+
+    // =========================================================================
+    // Short-Window Market Discovery (15m/30m Up/Down markets from /events API)
+    // =========================================================================
+    
+    /// Known series slugs for short-window markets (15m up/down)
+    const SHORT_WINDOW_SERIES: &'static [&'static str] = &[
+        "btc-up-or-down-15m",
+        "eth-up-or-down-15m", 
+        "sol-up-or-down-15m",
+        "btc-up-or-down-30m",
+        "eth-up-or-down-30m",
+        "sol-up-or-down-30m",
+    ];
+
+    /// Fetch short-window markets from the events API
+    /// These markets (e.g., BTC Up/Down 15m) are NOT in /markets endpoint,
+    /// they're nested inside /events responses
+    pub async fn fetch_short_window_markets(
+        &self,
+        markets_config: &crate::utils::MarketsConfig,
+    ) -> Result<Vec<Market>> {
+        if !markets_config.enable_short_window_markets {
+            return Ok(Vec::new());
+        }
+
+        info!("🔍 Fetching short-window markets from Events API...");
+        
+        let mut short_window_markets = Vec::new();
+
+        for series_slug in Self::SHORT_WINDOW_SERIES {
+            // Fetch events for this series
+            let url = format!(
+                "{}/events?series_slug={}&active=true&closed=false&limit=50",
+                self.base_url, series_slug
+            );
+
+            debug!("Fetching short-window events from {}", url);
+
+            match self.client.get(&url).send().await {
+                Ok(response) => {
+                    if !response.status().is_success() {
+                        debug!("Events API for {} returned status: {}", series_slug, response.status());
+                        continue;
+                    }
+
+                    match response.json::<Vec<EventResponse>>().await {
+                        Ok(events) => {
+                            for event in events {
+                                // Extract markets from each event
+                                for event_market in &event.markets {
+                                    // Only include active, not-closed markets with order book
+                                    if !event_market.active || event_market.closed || !event_market.enable_order_book {
+                                        continue;
+                                    }
+
+                                    // Convert to Market struct
+                                    if let Some(market) = event_market.to_market(&event.id, Some("crypto".to_string())) {
+                                        // Check end_date is within short window
+                                        let short_info = market.analyze_short_window(markets_config);
+                                        if short_info.is_short_window {
+                                            info!(
+                                                "🎯 Short-window market found: {} (expires in ~{} min)",
+                                                market.question,
+                                                short_info.minutes_to_expiry.unwrap_or(0)
+                                            );
+                                            short_window_markets.push(market);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to parse events for {}: {}", series_slug, e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to fetch events for {}: {}", series_slug, e);
+                }
+            }
+        }
+
+        info!("✅ Found {} short-window markets from Events API", short_window_markets.len());
+
+        // Add to cache
+        let mut cache = self.markets_cache.write().await;
+        for market in &short_window_markets {
+            cache.insert(market.market.clone(), market.clone());
+        }
+
+        Ok(short_window_markets)
+    }
 }
+
