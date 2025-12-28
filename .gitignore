@@ -19,3 +19,9 @@ credentials/
 node_modules/
 package-lock.json
 package.json
+
+# AI/Development tools
+.claude/
+.cursor/
+.gemini/
+.agent/

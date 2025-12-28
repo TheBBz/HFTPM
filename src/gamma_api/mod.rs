@@ -546,14 +546,38 @@ impl GammaClient {
     // Short-Window Market Discovery (15m/30m Up/Down markets from /events API)
     // =========================================================================
     
-    /// Known series slugs for short-window markets (15m up/down)
+    /// Known series slugs for short-window markets (15m/30m/1h up/down)
+    /// Discovered via Gamma API research - these markets only exist in /events endpoint
     const SHORT_WINDOW_SERIES: &'static [&'static str] = &[
+        // 15-minute series (highest frequency, best for short-window arb)
         "btc-up-or-down-15m",
-        "eth-up-or-down-15m", 
+        "eth-up-or-down-15m",
         "sol-up-or-down-15m",
+        "link-up-or-down-15m",
+        "doge-up-or-down-15m",
+        "xrp-up-or-down-15m",
+        "sui-up-or-down-15m",
+        "pepe-up-or-down-15m",
+        "avax-up-or-down-15m",
+        "ada-up-or-down-15m",
+        "bnb-up-or-down-15m",
+        "pol-up-or-down-15m",
+        "near-up-or-down-15m",
+        "apt-up-or-down-15m",
+        "hype-up-or-down-15m",
+        // 30-minute series
         "btc-up-or-down-30m",
         "eth-up-or-down-30m",
         "sol-up-or-down-30m",
+        // 1-hour series
+        "btc-up-or-down-1h",
+        "eth-up-or-down-1h",
+        "sol-up-or-down-1h",
+        "link-up-or-down-1h",
+        "doge-up-or-down-1h",
+        "xrp-up-or-down-1h",
+        "sui-up-or-down-1h",
+        "pepe-up-or-down-1h",
     ];
 
     /// Fetch short-window markets from the events API

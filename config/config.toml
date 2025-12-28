@@ -14,7 +14,7 @@ signature_type = 2  # 0=EOA, 1=Proxy/Magic, 2=Gnosis Safe
 
 [trading]
 trading_mode = "simulation"  # "live" or "simulation" - Start in simulation for safety
-strategy = "hybrid"  # "arbitrage", "marketmaking", "volumefarming", "hybrid" (RN1-style)
+strategy = "arbitrage"  # SHORT-WINDOW TESTING MODE - only arb, no MM or VF
 bankroll = 1000  # $1K starting capital
 max_arb_size = 150  # $150 max per trade (~15% of bankroll)
 min_edge = 0.012  # 1.2% minimum edge (AGGRESSIVE - research shows 2.2% is floor for $1K)
@@ -57,7 +57,7 @@ min_traders_24h = 10  # Minimum 10 traders in 24h
 min_order_book_depth = 10  # Minimum 10 price levels
 # Short-window (15m up/down) market dynamic discovery
 enable_short_window_markets = true  # Enable auto-discovery of 15m up/down markets
-short_window_minutes = 30  # Markets resolving within 30 min qualify (TODO: tune 15-30)
+short_window_minutes = 65  # Increased to 65 min to include 1-hour Up/Down markets
 min_minutes_to_expiry = 2  # Skip markets <2 min from expiry (avoid settlement risk)
 min_volume_24h_short = 100  # Lower volume bar for short-window markets ($100)
 enforce_enable_order_book = true  # Safety: always require order book for MM
