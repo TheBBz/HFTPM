@@ -45,6 +45,11 @@ struct LatencyMeasurement {
 
 impl std::fmt::Display for LatencyMeasurement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let status = if self.success { 
+            "✅".to_string() 
+        } else { 
+            format!("❌ {}", self.error_message.as_deref().unwrap_or("Unknown error"))
+        };
         write!(
             f,
             "{} | {} | Build: {:.2}ms | Sign: {:.2}ms | API: {:.2}ms | Total: {:.2}ms | {}",
@@ -54,7 +59,7 @@ impl std::fmt::Display for LatencyMeasurement {
             self.order_sign_us as f64 / 1000.0,
             self.api_submit_us as f64 / 1000.0,
             self.total_us as f64 / 1000.0,
-            if self.success { "✅" } else { "❌" }
+            status
         )
     }
 }
