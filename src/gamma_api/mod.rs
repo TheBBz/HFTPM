@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Timelike, Utc};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::Client;
@@ -581,8 +581,8 @@ impl GammaClient {
     ];
 
     /// Fetch short-window markets from the events API
-    /// These markets (e.g., BTC Up/Down 15m) are NOT in /markets endpoint,
-    /// they're nested inside /events responses
+    /// The API's series_slug filter is broken, so we generate event slugs dynamically
+    /// based on current time (e.g., btc-updown-15m-{timestamp})
     pub async fn fetch_short_window_markets(
         &self,
         markets_config: &crate::utils::MarketsConfig,
@@ -594,56 +594,48 @@ impl GammaClient {
         info!("🔍 Fetching short-window markets from Events API...");
         
         let mut short_window_markets = Vec::new();
-
-        for series_slug in Self::SHORT_WINDOW_SERIES {
-            // Fetch events for this series
-            let url = format!(
-                "{}/events?series_slug={}&active=true&closed=false&limit=50",
-                self.base_url, series_slug
-            );
-
-            debug!("Fetching short-window events from {}", url);
-
-            match self.client.get(&url).send().await {
-                Ok(response) => {
-                    if !response.status().is_success() {
-                        debug!("Events API for {} returned status: {}", series_slug, response.status());
-                        continue;
-                    }
-
-                    match response.json::<Vec<EventResponse>>().await {
-                        Ok(events) => {
-                            for event in events {
-                                // Extract markets from each event
-                                for event_market in &event.markets {
-                                    // Only include active, not-closed markets with order book
-                                    if !event_market.active || event_market.closed || !event_market.enable_order_book {
-                                        continue;
-                                    }
-
-                                    // Convert to Market struct
-                                    if let Some(market) = event_market.to_market(&event.id, Some("crypto".to_string())) {
-                                        // Check end_date is within short window
-                                        let short_info = market.analyze_short_window(markets_config);
-                                        if short_info.is_short_window {
-                                            info!(
-                                                "🎯 Short-window market found: {} (expires in ~{} min)",
-                                                market.question,
-                                                short_info.minutes_to_expiry.unwrap_or(0)
-                                            );
-                                            short_window_markets.push(market);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            warn!("Failed to parse events for {}: {}", series_slug, e);
-                        }
-                    }
+        let now = chrono::Utc::now();
+        
+        // Generate timestamps for the next few 15-minute intervals
+        // Round down to nearest 15 minutes, then get current + next few windows
+        let current_minute = now.minute();
+        let interval_start = (current_minute / 15) * 15;
+        let base_time = now
+            .with_minute(interval_start).unwrap_or(now)
+            .with_second(0).unwrap_or(now)
+            .with_nanosecond(0).unwrap_or(now);
+        
+        // Crypto tickers that have 15m markets
+        let tickers_15m = ["btc", "eth", "sol", "link", "doge", "xrp", "sui", "pepe", "avax", "ada", "bnb", "pol", "near", "apt", "hype"];
+        let tickers_1h = ["btc", "eth", "sol", "link", "doge", "xrp", "sui", "pepe"];
+        
+        // Fetch 15m events (current and next 3 intervals)
+        for offset_mins in [0i64, 15, 30, 45] {
+            let event_time = base_time + chrono::Duration::minutes(offset_mins);
+            let timestamp = event_time.timestamp();
+            
+            for ticker in &tickers_15m {
+                let event_slug = format!("{}-updown-15m-{}", ticker, timestamp);
+                if let Some(market) = self.fetch_event_by_slug(&event_slug, markets_config).await {
+                    short_window_markets.push(market);
                 }
-                Err(e) => {
-                    warn!("Failed to fetch events for {}: {}", series_slug, e);
+            }
+        }
+        
+        // Fetch 1h events (current and next hour)
+        let hour_start = now
+            .with_minute(0).unwrap_or(now)
+            .with_second(0).unwrap_or(now)
+            .with_nanosecond(0).unwrap_or(now);
+        
+        for offset_hours in [0i64, 1] {
+            let event_time = hour_start + chrono::Duration::hours(offset_hours);
+            let timestamp = event_time.timestamp();
+            
+            for ticker in &tickers_1h {
+                let event_slug = format!("{}-updown-1h-{}", ticker, timestamp);
+                if let Some(market) = self.fetch_event_by_slug(&event_slug, markets_config).await {
+                    short_window_markets.push(market);
                 }
             }
         }
@@ -657,6 +649,49 @@ impl GammaClient {
         }
 
         Ok(short_window_markets)
+    }
+    
+    /// Fetch a single event by its slug and extract the market
+    async fn fetch_event_by_slug(
+        &self,
+        event_slug: &str,
+        markets_config: &crate::utils::MarketsConfig,
+    ) -> Option<Market> {
+        let url = format!("{}/events/{}", self.base_url, event_slug);
+        
+        match self.client.get(&url).send().await {
+            Ok(response) => {
+                if !response.status().is_success() {
+                    return None; // Event doesn't exist for this timestamp
+                }
+                
+                match response.json::<EventResponse>().await {
+                    Ok(event) => {
+                        // Get the first active market from the event
+                        for event_market in &event.markets {
+                            if !event_market.active || event_market.closed || !event_market.enable_order_book {
+                                continue;
+                            }
+                            
+                            if let Some(market) = event_market.to_market(&event.id, Some("crypto".to_string())) {
+                                let short_info = market.analyze_short_window(markets_config);
+                                if short_info.is_short_window {
+                                    info!(
+                                        "🎯 Short-window market found: {} (expires in ~{} min)",
+                                        market.question,
+                                        short_info.minutes_to_expiry.unwrap_or(0)
+                                    );
+                                    return Some(market);
+                                }
+                            }
+                        }
+                        None
+                    }
+                    Err(_) => None,
+                }
+            }
+            Err(_) => None,
+        }
     }
 }
 
