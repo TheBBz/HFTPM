@@ -10,7 +10,7 @@ pub mod utils;
 pub mod volume_farmer;
 pub mod websocket;
 
-pub use arb_engine::{ArbEngine, ArbitrageOpportunity};
+pub use arb_engine::{ArbEngine, ArbitrageOpportunity, ShortWindowArbTracker};
 pub use executor::{OrderExecutor, SignedOrder};
 pub use gamma_api::GammaClient;
 pub use market_maker::MarketMaker;
@@ -93,6 +93,18 @@ pub async fn run() -> Result<()> {
     let mut market_maker = MarketMaker::new(&config);
     let mut volume_farmer = VolumeFarmer::new(&config);
 
+    // Initialize short-window arb tracker (gabagool-style Sum-<$1 arb)
+    let mut sw_arb_tracker =
+        ShortWindowArbTracker::new(rust_decimal::Decimal::from(config.trading.bankroll));
+    // Separate arb engine for short-window scanning (avoids borrow conflicts with WS loop)
+    let mut sw_arb_engine = ArbEngine::new(&config);
+    let sw_risk_manager = RiskManager::new(&config);
+    info!(
+        "⚡ Short-window arb enabled: {}% min edge, ${} max size",
+        config.trading.short_window_min_edge * rust_decimal::Decimal::from(100),
+        config.trading.short_window_max_size
+    );
+
     let markets = gamma_client.fetch_markets(&config.markets).await?;
     info!("📈 Loaded {} markets from Gamma API", markets.len());
 
@@ -151,6 +163,11 @@ pub async fn run() -> Result<()> {
             &mut volume_farmer,
             &parallel_scanner_loop,
             &orderbook_manager_scanner,
+            &mut sw_arb_engine,
+            &sw_risk_manager,
+            &markets,
+            &config.markets,
+            &mut sw_arb_tracker,
         ) => {
             info!("🛑 Strategy loop ended");
         }
@@ -164,6 +181,9 @@ pub async fn run() -> Result<()> {
             if matches!(strategy, Strategy::VolumeFarming | Strategy::Hybrid) {
                 info!("🗑️  Final Volume Farming Stats: {}", volume_farmer.get_stats());
             }
+            if matches!(strategy, Strategy::Arbitrage | Strategy::Hybrid) {
+                info!("⚡ Final Short-Window Arb Stats: {}", sw_arb_tracker.get_stats());
+            }
             info!("🔬 Final Scanner Stats: {}", parallel_scanner.get_stats().await);
         }
     }
@@ -173,12 +193,18 @@ pub async fn run() -> Result<()> {
 
 /// Run periodic strategy execution + parallel market scanning
 /// Integrates with the 16-core parallel scanner for cross-market and multi-outcome detection
+#[allow(clippy::too_many_arguments)]
 async fn run_periodic_strategies(
     strategy: &Strategy,
     market_maker: &mut MarketMaker,
     volume_farmer: &mut VolumeFarmer,
     parallel_scanner: &std::sync::Arc<ParallelScanner>,
     orderbook_manager: &std::sync::Arc<OrderBookManager>,
+    arb_engine: &mut ArbEngine,
+    risk_manager: &RiskManager,
+    markets: &[gamma_api::Market],
+    markets_config: &utils::MarketsConfig,
+    sw_arb_tracker: &mut ShortWindowArbTracker,
 ) -> Result<()> {
     use std::time::Duration;
 
@@ -186,6 +212,8 @@ async fn run_periodic_strategies(
     let mut stats_interval = tokio::time::interval(Duration::from_secs(60));
     // Parallel scanning every 5 seconds (fast enough to catch opportunities)
     let mut scan_interval = tokio::time::interval(Duration::from_secs(5));
+    // Short-window arb scanning every 2 seconds (faster for 15m markets)
+    let mut sw_arb_interval = tokio::time::interval(Duration::from_secs(2));
 
     loop {
         tokio::select! {
@@ -249,6 +277,42 @@ async fn run_periodic_strategies(
                             // TODO: Execute cross-market trades
                             // For now, just log that we found opportunities
                             info!("📊 Found {} cross-market opportunities (execution not yet implemented)", cross_opps.len());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // Short-window arb scanning (gabagool-style Sum-<$1 on 15m markets)
+            _ = sw_arb_interval.tick() => {
+                match strategy {
+                    Strategy::Arbitrage | Strategy::Hybrid => {
+                        // Auto-resolve expired trades (assume win for Sum-<$1 arb)
+                        sw_arb_tracker.auto_resolve_expired();
+
+                        // Scan for short-window arb opportunities
+                        let sw_opps = arb_engine.scan_short_window_markets(
+                            orderbook_manager,
+                            markets,
+                            markets_config,
+                            risk_manager,
+                        );
+
+                        // Simulate entry for each opportunity found
+                        for opp in sw_opps {
+                            let trade = sw_arb_tracker.simulate_entry(&opp);
+                            info!(
+                                "⚡ [SIM] {} | Entry: ${:.2} | Expected: ${:.2} | Resolves: {}min",
+                                trade.market_question.chars().take(35).collect::<String>(),
+                                trade.entry_cost,
+                                trade.expected_profit,
+                                trade.minutes_to_expiry
+                            );
+                        }
+
+                        // Log stats periodically (every ~30 seconds based on 2s interval)
+                        let stats = sw_arb_tracker.get_stats();
+                        if stats.trades_entered > 0 && stats.trades_entered % 15 == 0 {
+                            info!("⚡ {}", stats);
                         }
                     }
                     _ => {}
