@@ -271,7 +271,7 @@ impl OrderExecutor {
     ) -> Result<ExecutionResult> {
         let _timer = ScopedTimer::new("execute_arbitrage", None);
 
-        info!("🎯 Executing arbitrage for market {}", arb_op.market_id);
+        info!("🎯 Executing GTC arbitrage for market {}", arb_op.market_id);
 
         // Validate prices haven't moved beyond slippage tolerance
         if !self.validate_prices(arb_op).await? {
@@ -293,10 +293,11 @@ impl OrderExecutor {
 
         let start_time = Instant::now();
 
+        // Create and submit GTC orders (fast ~50ms per order)
         let signed_orders = self.create_signed_orders(arb_op).await?;
 
         info!(
-            "📦 Created {} signed orders for {}",
+            "📦 Created {} GTC orders for {} (avoiding 500ms taker delay)",
             signed_orders.len(),
             arb_op.market_id
         );
@@ -308,6 +309,25 @@ impl OrderExecutor {
             .iter()
             .filter(|r| r.success && r.order_id.is_some())
             .count();
+
+        // For GTC orders, we need to wait briefly for fills
+        // Short-window arb opportunities typically have immediate liquidity
+        if success_count > 0 {
+            info!("⏳ Waiting 200ms for GTC orders to fill...");
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            
+            // Cancel any unfilled orders to avoid stale positions
+            match self.cancel_open_orders(&arb_op.market_id).await {
+                Ok(cancelled) => {
+                    if cancelled > 0 {
+                        info!("🗑️  Cancelled {} unfilled GTC orders", cancelled);
+                    }
+                }
+                Err(e) => {
+                    warn!("⚠️ Failed to cancel orders: {}", e);
+                }
+            }
+        }
 
         let total_cost = submission_results
             .iter()
@@ -342,11 +362,9 @@ impl OrderExecutor {
         let partial_fill = success_count > 0 && !all_filled;
 
         info!(
-            "✅ Execution results: {}/{} orders filled, ${:.2}/${:.2} filled, {:.2}ms",
-            filled_count,
+            "✅ GTC Execution: {}/{} orders submitted, {:.2}ms total",
+            success_count,
             signed_orders.len(),
-            filled_amount,
-            arb_op.position_size,
             execution_time_ms
         );
 
@@ -381,6 +399,8 @@ impl OrderExecutor {
             let price = edge.price;
             let size = edge.size;
 
+            // Use GTC (Good Till Cancelled) instead of FOK to avoid 500ms taker delay
+            // By posting at the current ask price, we act as an aggressive maker
             let signable_order = self
                 .clob_client
                 .limit_order()
@@ -388,7 +408,7 @@ impl OrderExecutor {
                 .size(size)
                 .price(price)
                 .side(Side::Buy)
-                .order_type(OrderType::FOK)
+                .order_type(OrderType::GTC) // GTC = 50ms vs FOK = 500ms
                 .build()
                 .await
                 .context("Failed to build order")?;
@@ -429,6 +449,7 @@ impl OrderExecutor {
 
     async fn submit_single_order(&self, signed_order: &SignedOrder) -> OrderResult {
         // Re-create and sign the order for submission
+        // Use GTC to avoid 500ms taker delay
         let signable_order = match self
             .clob_client
             .limit_order()
@@ -436,7 +457,7 @@ impl OrderExecutor {
             .size(signed_order.size)
             .price(signed_order.price)
             .side(Side::Buy)
-            .order_type(OrderType::FOK)
+            .order_type(OrderType::GTC) // GTC = 50ms vs FOK = 500ms
             .build()
             .await
         {

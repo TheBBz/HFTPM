@@ -150,9 +150,10 @@ async fn main() -> Result<()> {
     let yes_token = &test_market.assets_ids[0];
     let no_token = &test_market.assets_ids[1];
 
-    // Test parameters
-    let test_size = Decimal::from(1); // $1 per test
-    let test_price = Decimal::from_str_exact("0.50")?; // 50 cents (neutral)
+    // Test parameters - $1 minimum for marketable orders
+    // Order value = size * price, so 2 shares @ $0.50 = $1.00
+    let test_size = Decimal::from(2); // 2 shares
+    let test_price = Decimal::from_str_exact("0.50")?; // $0.50 each
     
     let mut measurements: Vec<LatencyMeasurement> = Vec::new();
 
@@ -397,7 +398,9 @@ async fn test_order_latency(
     let total_us = total_start.elapsed().as_micros() as u64;
 
     match response {
-        Ok(_responses) => {
+        Ok(responses) => {
+            // Log the actual response to see what PM returned
+            info!("📦 API Response: {:?}", responses);
             LatencyMeasurement {
                 test_name: test_name.to_string(),
                 order_type: format!("{:?}", order_type),
