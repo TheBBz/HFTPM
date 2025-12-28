@@ -76,7 +76,7 @@ async fn main() -> Result<()> {
     {
         Ok(balance) => {
             println!("   Balance: ${:.6}", balance.balance);
-            println!("   Allowance: ${:.6}", balance.allowance);
+            println!("   Allowances: {:?}", balance.allowances);
         }
         Err(e) => {
             println!("❌ Balance query failed: {}", e);
