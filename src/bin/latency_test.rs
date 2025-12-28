@@ -119,8 +119,8 @@ async fn main() -> Result<()> {
     info!("💰 Current balance: ${:.2}", balance.balance);
 
     if balance.balance < Decimal::from(5) {
-        error!("❌ Insufficient balance for testing. Need at least $5.");
-        return Ok(());
+        warn!("⚠️  Balance appears low (${:.2}). This might be a proxy wallet issue.", balance.balance);
+        warn!("⚠️  Proceeding anyway - orders may fail if truly insufficient.");
     }
 
     // Fetch a short-window market to test on
