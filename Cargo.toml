@@ -63,3 +63,8 @@ opt-level = 0
 [[bin]]
 name = "sw_arb_sim"
 path = "src/bin/sw_arb_sim.rs"
+
+[[bin]]
+name = "latency_test"
+path = "src/bin/latency_test.rs"
+
